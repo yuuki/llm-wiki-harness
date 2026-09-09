@@ -1,0 +1,29 @@
+{
+	"name": "wiki-lens",
+	"version": "0.1.0",
+	"description": "Read-only visualization of the LLM wiki layer in this vault",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "vitest run"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/three": "^0.185.0",
+		"esbuild": "^0.25.0",
+		"obsidian": "latest",
+		"tslib": "^2.6.0",
+		"typescript": "^5.5.0",
+		"vitest": "^3.2.7"
+	},
+	"dependencies": {
+		"graphology": "^0.26.0",
+		"graphology-communities-louvain": "^2.0.2",
+		"graphology-layout": "^0.6.1",
+		"graphology-layout-forceatlas2": "^0.10.1",
+		"sigma": "^3.0.0",
+		"three": "^0.185.1",
+		"three-spritetext": "^1.10.0"
+	}
+}

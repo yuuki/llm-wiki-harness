@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "mode": "generic",
+  "config": {
+    "generic": {
+      "sources_folder": "wiki/sources/",
+      "entities_folder": "wiki/entities/",
+      "concepts_folder": "wiki/concepts/",
+      "sessions_folder": "wiki/sessions/"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+.DS_Store
+**/.DS_Store
+**/node_modules/
+**/.vite/
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.vault-meta/*.lock
+.vault-meta/bm25/
+.vault-meta/address-counter.txt
+plugins/wiki-lens/data.json

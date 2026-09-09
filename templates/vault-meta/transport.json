@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "manual_override": true,
+  "preferred": "filesystem",
+  "fallback_chain": ["filesystem"],
+  "available": {
+    "filesystem": {
+      "present": true,
+      "note": "Claude / Codex の Read・Write・Edit を使う最終経路"
+    }
+  }
+}

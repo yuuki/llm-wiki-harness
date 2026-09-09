@@ -1,0 +1,23 @@
+{
+  "skill_name": "wiki-refactor",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "wiki/concepts を棚卸しして、重複 concept の統合候補と肥大化 concept の分解候補を計画してください。まだ編集はしないでください。",
+      "expected_output": "Reads vault/wiki conventions, inventories wiki/concepts, and returns a scoped refactor plan with merge/split/parent-child/compress/supplement decisions and verification criteria.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "wiki/concepts の lint-stub と必須見出し欠落を修正し、catalog は wiki-catalog.py だけで同期してください。最後に wiki-catalog.py prepend-log で記録してください。",
+      "expected_output": "Edits only content wiki pages, normalizes concept headings/frontmatter/sources, updates catalogs via wiki-catalog.py (no Read/Edit of index.md/log.md), prepends a log entry via catalog.py, and runs deterministic verification.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "RPC規模特性 と RPCレイテンシ特性 を クラウドスケールRPC特性 に統合し、古いリンクが残らないようにしてください。",
+      "expected_output": "Merges duplicate concept pages into the canonical concept, preserves old titles as aliases, updates wikilinks, removes or minimizes obsolete pages only after reference checks, and verifies no old wikilinks remain.",
+      "files": []
+    }
+  ]
+}

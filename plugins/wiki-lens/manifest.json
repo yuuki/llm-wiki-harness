@@ -1,0 +1,10 @@
+{
+	"id": "wiki-lens",
+	"name": "Wiki Lens",
+	"version": "0.1.0",
+	"minAppVersion": "1.5.0",
+	"description": "Read-only lens for the LLM wiki layer (wiki/). Health, backbone, local neighborhood, growth, 3D layers, and structural gaps.",
+	"author": "yuuki",
+	"authorUrl": "https://github.com/yuuki/llm-wiki-harness",
+	"isDesktopOnly": true
+}

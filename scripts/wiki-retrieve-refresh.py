@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""wiki-retrieve-refresh.py — rechunk pages then rebuild the BM25 index.
+
+Does not modify contextual-prefix.py or bm25-index.py; only subprocesses them.
+
+Usage:
+  wiki-retrieve-refresh.py --pages PATH [PATH ...] [--no-llm]
+  wiki-retrieve-refresh.py --all [--no-llm]
+
+--no-llm is the default. Pass --allow-egress to let contextual-prefix use an LLM.
+
+Stdout JSON: {pages, chunks_written, chunks_unchanged, bm25_ok}
+
+Exit codes:
+  0 — success
+  1 — contextual-prefix or bm25-index failed
+  2 — usage error or missing sibling script
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+EXIT_OK = 0
+EXIT_CHILD = 1
+EXIT_USAGE = 2
+
+DONE_RE = re.compile(r"pages=(\d+)\s+chunks_written=(\d+)\s+chunks_unchanged=(\d+)")
+WROTE_RE = re.compile(r"wrote=(\d+)")
+SKIP_RE = re.compile(r"skipped\(unchanged\)=(\d+)")
+
+
+def log(msg):
+    print(msg, file=sys.stderr)
+
+
+def scrape_prefix_stderr(stderr):
+    done = DONE_RE.search(stderr)
+    if done:
+        return int(done.group(1)), int(done.group(2)), int(done.group(3))
+    wrote = [int(x) for x in WROTE_RE.findall(stderr)]
+    skipped = [int(x) for x in SKIP_RE.findall(stderr)]
+    if wrote or skipped:
+        return None, sum(wrote), sum(skipped)
+    return None, None, None
+
+
+def run_logged(cmd):
+    env = os.environ.copy()
+    env["WIKI_VAULT_ROOT"] = str(VAULT_ROOT)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+        if not proc.stderr.endswith("\n"):
+            sys.stderr.write("\n")
+    return proc
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Refresh contextual chunks and BM25.")
+    parser.add_argument("--pages", nargs="+", help="Vault-relative page paths")
+    parser.add_argument("--all", action="store_true", help="Rechunk every wiki page")
+    parser.add_argument("--no-llm", action="store_true", default=True,
+                        help="Synthetic prefixes (default). Kept for CLI compatibility.")
+    parser.add_argument("--allow-egress", action="store_true",
+                        help="Allow contextual-prefix LLM tiers (overrides --no-llm)")
+    args = parser.parse_args(argv)
+
+    if not args.pages and not args.all:
+        log("ERR: require --pages PATH ... or --all")
+        return EXIT_USAGE
+
+    prefix_py = SCRIPT_DIR / "contextual-prefix.py"
+    bm25_py = SCRIPT_DIR / "bm25-index.py"
+    if not prefix_py.is_file():
+        log(f"ERR: missing {prefix_py}")
+        return EXIT_USAGE
+    if not bm25_py.is_file():
+        log(f"ERR: missing {bm25_py}")
+        return EXIT_USAGE
+
+    prefix_flags = []
+    if args.allow_egress:
+        prefix_flags.append("--allow-egress")
+    else:
+        prefix_flags.append("--no-llm")
+
+    page_count = None
+    chunks_written = 0
+    chunks_unchanged = 0
+    have_counts = False
+    failed = False
+
+    if args.all:
+        log("wiki-retrieve-refresh: --all walks every wiki/*.md; prefer --pages on ingest")
+        cmd = [sys.executable, str(prefix_py), "--all", *prefix_flags]
+        log(f"wiki-retrieve-refresh: {' '.join(cmd)}")
+        proc = run_logged(cmd)
+        scraped_pages, wrote, skipped = scrape_prefix_stderr(proc.stderr)
+        if wrote is not None:
+            chunks_written = wrote
+            chunks_unchanged = skipped if skipped is not None else 0
+            have_counts = True
+        page_count = scraped_pages
+        if proc.returncode != 0:
+            failed = True
+            log(f"wiki-retrieve-refresh: contextual-prefix exit {proc.returncode}")
+    else:
+        page_count = len(args.pages)
+        for page in args.pages:
+            cmd = [sys.executable, str(prefix_py), page, *prefix_flags]
+            log(f"wiki-retrieve-refresh: {' '.join(cmd)}")
+            proc = run_logged(cmd)
+            _, wrote, skipped = scrape_prefix_stderr(proc.stderr)
+            if wrote is not None:
+                chunks_written += wrote
+                chunks_unchanged += skipped if skipped is not None else 0
+                have_counts = True
+            if proc.returncode != 0:
+                failed = True
+                log(f"wiki-retrieve-refresh: contextual-prefix exit {proc.returncode} for {page}")
+
+    bm25 = run_logged([sys.executable, str(bm25_py), "build"])
+    bm25_ok = bm25.returncode == 0
+    if not bm25_ok:
+        failed = True
+        log(f"wiki-retrieve-refresh: bm25-index.py build exit {bm25.returncode}")
+
+    payload = {
+        "pages": page_count,
+        "chunks_written": chunks_written if have_counts else None,
+        "chunks_unchanged": chunks_unchanged if have_counts else None,
+        "bm25_ok": bm25_ok,
+    }
+    print(json.dumps(payload, ensure_ascii=False))
+    return EXIT_CHILD if failed else EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
