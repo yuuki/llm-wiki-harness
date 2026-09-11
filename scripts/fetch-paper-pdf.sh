@@ -28,6 +28,11 @@
 #   image_manifest=<.raw/papers/<slug>/images/images.json>
 #   figure_ids=<raw の一意な図表 ID 数。verify 失敗時は空>
 #   figure_id_counts=<ID:回数 をカンマ区切り。verify 失敗時は空>
+#   existing_sources=<同じ arXiv ID / DOI を持つ既存 wiki/sources ページ(; 区切り)または空>
+#       # scripts/paper-ids.py check の結果。空でなければ新規ページを作らず既存ページの更新を検討する
+#
+# 環境変数:
+#   FETCH_FAIL_IF_EXISTS=1  既存 source ページに一致したらダウンロード前に失敗(終了コード 4)
 #
 # 注意:
 #   - ネットワーク取得を伴う。サンドボックス下では arxiv.org 等への接続が拒否されることがある。
@@ -98,6 +103,28 @@ else
   SLUG="$(sanitize_slug "$base")"
 fi
 [ -n "$SLUG" ] || SLUG="paper"
+
+# --- 既存 source の照合(同じ論文の二重取り込みを防ぐ) -------------------------
+# arXiv ID か URL(doi.org を含む)を paper-ids.py の索引に当てる。ローカル PDF は照合しない
+# (題名しか手掛かりが無く、pdfinfo の題名は信用できない)。一致しても既定では取得を続け、
+# existing_sources= で呼び出し側に知らせる。判断(既存ページを更新するか)は呼び出し側の責務。
+EXISTING_SOURCES=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/paper-ids.py" ] && command -v python3 >/dev/null 2>&1; then
+  REF="${ARXIV_ID:-${SRC_URL:-}}"
+  if [ -n "$REF" ]; then
+    EXISTING_SOURCES="$(python3 "$SCRIPT_DIR/paper-ids.py" check "$REF" --compact 2>/dev/null \
+      | awk -F'\t' 'NR==1 { print $5 }' || true)"
+  fi
+  if [ -n "$EXISTING_SOURCES" ]; then
+    err "warn: 同じ論文の source ページが既にある: $EXISTING_SOURCES"
+    if [ "${FETCH_FAIL_IF_EXISTS:-0}" = "1" ]; then
+      printf 'existing_sources=%s\n' "$EXISTING_SOURCES"
+      err "ERROR: FETCH_FAIL_IF_EXISTS=1 のため取得を中止した"
+      exit 4
+    fi
+  fi
+fi
 
 PDF="${DEST_DIR}/${SLUG}.pdf"
 TXT="${DEST_DIR}/${SLUG}.txt"
@@ -269,3 +296,4 @@ printf 'images_count=%s\n' "$IMAGES_COUNT"
 printf 'image_manifest=%s\n' "$IMAGE_MANIFEST"
 printf 'figure_ids=%s\n' "$FIGURE_IDS"
 printf 'figure_id_counts=%s\n' "$FIGURE_ID_COUNTS"
+printf 'existing_sources=%s\n' "$EXISTING_SOURCES"

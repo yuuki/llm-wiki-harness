@@ -15,7 +15,7 @@ subagent はユーザーの設問も、これまでの探索も、vault の規�
 ### 雛形
 
 ```
-あなたは Obsidian vault（作業ディレクトリ = vault ルート）の wiki レイヤーから、
+あなたは Obsidian vault(/Users/y-tsubouchi/obsidian/research)の wiki レイヤーから、
 サーベイ執筆のための素材を抽出する担当である。
 
 ## 担当クラスタ
@@ -23,8 +23,8 @@ subagent はユーザーの設問も、これまでの探索も、vault の規�
 主題: <クラスタの主題を一文で>
 
 担当ページ(絶対パスで全件列挙。これ以外は読まない):
-- wiki/sources/@YYYY__SOURCE__Title.md
-- wiki/concepts/<概念>.md
+- /Users/y-tsubouchi/obsidian/research/wiki/sources/@YYYY__SOURCE__Title.md
+- /Users/y-tsubouchi/obsidian/research/wiki/concepts/<概念>.md
   (以下同様)
 
 ## 抽出する項目
@@ -65,6 +65,7 @@ subagent はユーザーの設問も、これまでの探索も、vault の規�
 - 「記載なし」の指示を落とすと、subagent は訓練データで穴を埋める。これが本 skill で最も起きやすい事故である。
 - クラスタは文献数で均等割りせず主題の境界で切る。境界をまたぐ文献は両クラスタに渡してよい。重複は矛盾検出に役立つ。
 - 担当ページは絶対パスで全件列挙する。「関連するページを探して読め」と指示すると母集団が制御できなくなる。
+- クラスタの担当ページが多く、subagent に各ページを開かせるより先に抜粋を束で渡したいときは、メイン文脈が `python3 scripts/wiki-context-pack.py "<クラスタの問い>" --no-retrieve --pages <担当ページ...> --budget-tokens 8000 --out /tmp/pack-<クラスタ>.md` で束を作り、その 1 ファイルを担当ページの代わりに渡す。束は予算に入らなかったページを末尾に「省略」として明示するので、subagent はそこに挙がったページだけ `wiki-excerpt.py` で追加取得する。母集団は `--pages` で固定し、retrieve に任せない。
 
 ---
 

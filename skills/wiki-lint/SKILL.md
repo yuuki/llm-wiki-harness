@@ -41,6 +41,66 @@ Work through these in order:
 8. **Missing page files**. From wikilinks collected while scanning **content** pages (not catalogs), confirm each target with `python3 scripts/wiki-resolve.py "<name>" --type any`. Empty candidates mean a dead link. Do **not** Read `wiki/index.md` to hunt stale catalog lines; that file is a human derivative.
 9. **Address validity** (DragonScale Mechanism 2). For every page that has an `address:` frontmatter field, validate the format. See the **Address Validation** section below.
 10. **Semantic tiling** (DragonScale Mechanism 3, opt-in). Flag candidate duplicate pages (across all scanned types, not just concepts) via embedding cosine similarity. See the **Semantic Tiling** section below.
+11. **Contradiction index** (conventions §5). Regenerate the index first, then read its counts and the one-sided candidates — never grep callouts by hand:
+
+    ```bash
+    python3 scripts/contradiction-index.py --write      # wiki/meta/contradictions.md + .vault-meta/contradictions.json
+    python3 scripts/contradiction-index.py --one-sided  # pairs where only one page carries the callout
+    ```
+
+    Report the counts (callouts / pages / open / explained) and list the one-sided candidates under **## Contradictions**. §5 requires a contradiction to be marked on *both* pages; a one-sided pair is a candidate for the human to add the counterpart callout, not an automatic fix. Do not edit callouts from lint. The **Stale Claims** check (item 3) stays a human comparison; the index only tells you where the wiki already knows it disagrees with itself.
+12. **Recompile queue** (conventions §8 update rule 6). Sync the compile-debt scan into the persistent queue and paste its report:
+
+    ```bash
+    python3 scripts/recompile-queue.py refresh   # new debt → pending, cleared debt → done, done pages with new inbox → pending again
+    python3 scripts/recompile-queue.py report    # markdown block: counts by state, waiting bullets, top 10, blocked
+    ```
+
+    Paste the `report` output as the **## Recompile Queue** section. Lint never recompiles and never changes queue states other than through `refresh`; `blocked` pages (three human rejections) are listed for the human to `reopen` or `skip`. Stage the queue with `git add -f .vault-meta/recompile-queue.json` in the lint commit.
+13. **Claim audit** (sampled, conventions §5). Check that recompiled propositions still say what their cited sources say. Sample, judge each packet per [`wiki-refactor/references/claim-audit.md`](../../../.agents/skills/wiki-refactor/references/claim-audit.md) §2, record, and paste the summary:
+
+    ```bash
+    python3 scripts/claim-audit.py sample --recompiled --limit 5 --per-page 2 --seed "$(date +%Y%m%d)" > /tmp/claim-sample.json
+    # judge → /tmp/claim-verdicts.json
+    python3 scripts/claim-audit.py record --verdicts /tmp/claim-verdicts.json
+    python3 scripts/claim-audit.py report      # paste as ## Claim Audit
+    ```
+
+    Lint records verdicts but does not edit propositions; `not_in_source` / `unsupported` findings go to the report as **Needs review** for a wiki-refactor pass (留保 line or weakened claim, one page per commit). Stage `.vault-meta/claim-audit.json` (with `-f`) and the day's `wiki/meta/claim-audit-YYYY-MM-DD.md`.
+14. **Concept candidates** (conventions §12). Deferred concept candidates live in `.vault-meta/concept-candidates.json`; ingest adds mentions, this check reports which ones have reached the creation threshold (2 independent documents; chapter sources of one book count once):
+
+    ```bash
+    python3 scripts/concept-candidates.py seed-from-log      # idempotent: pick up any `- Deferred:` lines not yet in the ledger
+    python3 scripts/concept-candidates.py report              # paste as ## Concept Candidates
+    ```
+
+    The **Missing Pages** check (item 3 in the report) finds names mentioned without a page; this check is the complement for names an ingest *already judged* worth a concept but deferred. `ready` candidates are a proposal for the human (create via the next related ingest, or `reject --reason`), not an automatic fix. "promote し忘れ" rows (a same-named concept already exists) are fixed with `promote`. Stage the ledger with `git add -f .vault-meta/concept-candidates.json`.
+
+15. **Paper IDs and duplicate papers** (conventions §3). Source pages carry `arxiv_id:` / `doi:` so the same paper is never ingested twice under a different slug. This check rebuilds the ID index, backfills IDs derivable from `url:` / `sources:` / body, and lists papers that exist as two or more documents (chapter-split sources fold into one document):
+
+    ```bash
+    python3 scripts/paper-ids.py scan --write-index          # .vault-meta/paper-ids.json (derived cache, not tracked)
+    python3 scripts/paper-ids.py backfill --write            # skips pages dirty in the git worktree; does not bump updated:
+    python3 scripts/paper-ids.py report                      # paste as ## Paper IDs
+    ```
+
+    Backfill is safe to auto-fix (it only adds frontmatter lines). Duplicate groups and "1 枚もの + 章分割" coexistence are **Needs review**: merge or delete is a human decision (keep the page with more inbound links, move its `related:`, and leave a `related:` bridge if both stay, e.g. a reading-series note next to the original).
+
+16. **Entity aliases** (conventions §12 rule 6). Detect entity pages that name the same person or organisation (English vs Japanese title, legal suffix, `J. Dean` vs `Jeff Dean`, `MIT` vs its full name, alias collisions where one page's title sits in another page's `aliases`):
+
+    ```bash
+    python3 scripts/entity-resolve.py report --limit 30     # paste as ## Entity Aliases
+    ```
+
+    Read-only; every row is **Needs review** for a wiki-refactor 統合 pass (`entity-resolve.py plan --keep A --drop B` shows the affected pages). Surname-only and `Y. Li`-style aliases are ignored by the detector. Two different organisations sharing a short acronym are fixed by removing one alias, not by merging. After the human decides, `decide --merged` / `decide --rejected --reason` records it; stage `.vault-meta/entity-merges.json` with `git add -f` once it exists.
+
+17. **Machine state (doctor)**. Run this **first**, before checks 1–16, because a stale retrieval index or a duplicate address distorts the other checks (dead-link hunting against chunks that point at moved pages, tiling over unchunked pages):
+
+    ```bash
+    python3 scripts/wiki-doctor.py            # OK / WARN / FAIL table with a fix: command per finding; exit 1 on any FAIL
+    ```
+
+    Read-only. Apply the printed `fix:` commands yourself only for the derived caches (`wiki-retrieve-refresh.py`, `wiki-graph.py build`, `paper-ids.py scan --write-index`, `contradiction-index.py build`) and stale locks (`wiki-lock.sh reap`); everything else (duplicate `address:`, manifest gaps, `*.tmp` residue that may belong to a concurrent ingest, corrupt ledgers) is **Needs review**. Paste the table as **## Doctor** at the top of the report.
 
 ---
 
@@ -59,6 +119,9 @@ status: developing
 ---
 
 # Lint Report: YYYY-MM-DD
+
+## Doctor
+(paste `python3 scripts/wiki-doctor.py` verbatim; derived-cache and stale-lock fixes are applied before the other checks, the rest is Needs review)
 
 ## Summary
 - Pages scanned: N
@@ -81,8 +144,27 @@ status: developing
 ## Stale Claims
 - [[Page Name]]: claim "X" may conflict with newer source [[Newer Source]].
 
+## Contradictions
+- Index regenerated: [[contradictions]] — N callouts on M pages (open N, explained N).
+- One-sided: [[Host Page]] marks a contradiction with [[Party Page]] but the party carries no counterpart callout. Suggest: add the callout on [[Party Page]] or mark `(status: explained)` on the host.
+
 ## Cross-Reference Gaps
 - [[Entity Name]] mentioned in [[Page A]] without a wikilink.
+
+## Recompile Queue
+(paste `python3 scripts/recompile-queue.py report` verbatim)
+
+## Claim Audit
+(paste `python3 scripts/claim-audit.py report` verbatim; list `not_in_source` / `unsupported` findings under Needs review)
+
+## Concept Candidates
+(paste `python3 scripts/concept-candidates.py report` verbatim; `ready` rows are proposals for the human, not auto-fixes)
+
+## Paper IDs
+(paste `python3 scripts/paper-ids.py report` verbatim; duplicate groups are Needs review, backfill counts are auto-fixed)
+
+## Entity Aliases
+(paste `python3 scripts/entity-resolve.py report` verbatim; every pair is Needs review for wiki-refactor 統合, never auto-merged)
 ```
 
 ---

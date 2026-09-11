@@ -23,6 +23,11 @@ Stdout:
   --compact    — one TSV line per query:
                  <query>\\t<type>\\t<HIT|NONE>\\t<path>(<match> <score>); ...
                  paths are relative to wiki/; default --top drops to 3
+  Concept-candidate ledger hint: when a concept/any query has NO page hit but the
+  name (or an alias) is in `.vault-meta/concept-candidates.json`, JSON gains
+  `candidate_ledger: {name, state, source_count, ready}` and the compact 4th
+  column reads `ledger:<name>(<k> docs, <state>)`. Ingest then calls
+  `concept-candidates.py add` instead of re-deferring blind (conventions §12).
   --paths-only — `# <query>` header line, then one vault-relative path per line
 Empty candidates is success (exit 0).
 
@@ -86,6 +91,7 @@ def err(msg):
 def reset_caches():
     _LISTDIR_CACHE.clear()
     _FOLDED_CACHE.clear()
+    _LEDGER_CACHE.clear()
 
 
 def unquote(value):
@@ -565,9 +571,57 @@ def one_line(text):
     return re.sub(r"\s+", " ", str(text)).strip()
 
 
+LEDGER_REL = ".vault-meta/concept-candidates.json"
+_LEDGER_CACHE = {}
+
+
+def _ledger_key(name):
+    import unicodedata
+    s = unicodedata.normalize("NFKC", name or "").casefold()
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def load_candidate_ledger():
+    """concept-candidates.py の台帳を 1 回だけ読む(無ければ空)。"""
+    if "data" in _LEDGER_CACHE:
+        return _LEDGER_CACHE["data"]
+    path = VAULT_ROOT / LEDGER_REL
+    data = {}
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")).get("candidates", {})
+            for key, entry in raw.items():
+                data[key] = entry
+                for alias in entry.get("aliases", []) or []:
+                    data.setdefault(_ledger_key(alias), entry)
+        except (OSError, json.JSONDecodeError, AttributeError):
+            data = {}
+    _LEDGER_CACHE["data"] = data
+    return data
+
+
+def ledger_hint(name, type_key):
+    if type_key not in ("concept", "any"):
+        return None
+    entry = load_candidate_ledger().get(_ledger_key(name))
+    if not entry:
+        return None
+    docs = {re.sub(r"\s+-\s+(Chapter|Ch\.|Part|Section|Appendix|第|付録)\s*.*$", "", s, flags=re.I).strip()
+            for s in entry.get("sources", [])}
+    return {
+        "name": entry.get("name"),
+        "state": entry.get("state", "pending"),
+        "source_count": len(docs),
+        "ready": entry.get("state", "pending") == "pending" and len(docs) >= 2,
+    }
+
+
 def compact_line(result):
     cands = result["candidates"]
     head = f"{one_line(result['query'])}\t{result['type']}\t{'HIT' if cands else 'NONE'}\t"
+    if not cands and result.get("candidate_ledger"):
+        h = result["candidate_ledger"]
+        return head + f"ledger:{one_line(h['name'])}({h['source_count']} docs, {h['state']})"
     return head + "; ".join(
         f"{short_path(rec['path'])}({rec['match']} {float(rec.get('score', 0)):.2f})"
         for rec in cands
@@ -628,13 +682,18 @@ def main(argv=None):
 
     results = []
     for name, type_key in queries:
-        results.append({
+        result = {
             "query": name,
             "type": type_key,
             "candidates": resolve_one(
                 name, type_key, alias_index, top, args.min_score, use_bm25, enrich
             ),
-        })
+        }
+        if not result["candidates"]:
+            hint = ledger_hint(name, type_key)
+            if hint:
+                result["candidate_ledger"] = hint
+        results.append(result)
 
     if len(results) == 1:
         log(f"wiki-resolve: {len(results[0]['candidates'])} candidate(s) for {results[0]['query']!r}")

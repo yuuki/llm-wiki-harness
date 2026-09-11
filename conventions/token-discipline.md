@@ -106,7 +106,7 @@ python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD ingest-pap
 ## query の経路
 
 1. **クイック**: trim 済み `wiki/hot.md` だけ。足りなければ「standard で retrieve する」と返す。`index.md` は開かない。
-2. **標準 / 深掘り**: `python3 scripts/retrieve.py "<質問>" --top 5` を第一経路にする。ヒットしたページは `wiki-excerpt.py` で読む。concept のハブなら子概念を 1〜2 枚足す。
+2. **標準 / 深掘り**: `python3 scripts/retrieve.py "<質問>" --top 5` を第一経路にする。ヒットしたページは `wiki-excerpt.py` で読む。concept のハブなら子概念を 1〜2 枚足す。`.vault-meta/graph.json` があれば候補に graph 路が混ざる(`channels`)。graph のみの候補は excerpt してから引用する。矛盾を問う設問は先に `contradiction-index.py --query`。
 3. retrieve が exit 10 のときだけ、`wiki-resolve.py` と `rg` でフォールバックする。`index.md` 全文はフォールバックにも使わない。
 
 ## ingest の作業集合
@@ -131,6 +131,7 @@ python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD ingest-pap
 - 単一ソースで閉じる用語は source ページに留める。
 - concept を新設するのは、(a) 既存 concept が resolve でヒットしない、かつ (b) 2 ソース以上にまたがるか、今後またがることが明らかなハブ、のときだけ。
 - 書籍・thesis で章ごとに用語が出ても、章のたびに新設しない。文書全体で 3 件までを目安にし、残りはハブ entity と章 source に置く。
+- 溢れた候補は `concept-candidates.py` の台帳にも積む。`wiki-resolve.py` の `ledger:` ヒントを見る。迷う候補は `wiki-profile.py`(profile 全文は読まない。終了 3 なら飛ばす)。
 
 ## 子概念(親子化)
 
@@ -154,4 +155,12 @@ python3 scripts/wiki-concept-stats.py --compile-debt --min-inbox 10
 
 ## retrieve の鮮度
 
-`.vault-meta/bm25` が取り込みより古いと、query が外れる。ingest の最後に必ず `wiki-retrieve-refresh.py --pages` を呼ぶ。prefix か BM25 が非 0 なら refresh も非 0。全件作り直しは `wiki-retrieve-refresh.py --all`(wiki 全ページを歩くので、日常の ingest では使わない)。子プロセスは `WIKI_VAULT_ROOT` を見る。
+`.vault-meta/bm25` が取り込みより古いと、query が外れる。ingest の最後に必ず `wiki-retrieve-refresh.py --pages` を呼ぶ(BM25 のあと `wiki-graph.py build` で `.vault-meta/graph.json` も再構築する。graph 構築が落ちても retrieve の BM25 路は動く)。prefix か BM25 が非 0 なら refresh も非 0。全件作り直しは `wiki-retrieve-refresh.py --all`(wiki 全ページを歩くので、日常の ingest では使わない)。子プロセスは `WIKI_VAULT_ROOT` を見る。
+
+## コンテキスト束
+
+subagent への引き継ぎや長い作業の再開では、候補ページを毎回手で excerpt しない。`python3 scripts/wiki-context-pack.py "<目標>" --budget-tokens 6000` が retrieve(または `--pages`)の抜粋を予算内に詰め、入らないページを outline / 省略として末尾に列挙する。束の 1 ファイルだけを渡し、省略に挙がったページだけ追加取得する。
+
+## 機械状態(doctor)
+
+lint の最初に `python3 scripts/wiki-doctor.py` を走らせる。索引の鮮度、消えたページを指す chunk、残留ロック、address 計数器、`.raw/.manifest.json`、台帳 JSON、hot 窓、一時ファイルを OK / WARN / FAIL で出す。派生キャッシュの修復コマンドだけを先に適用し、それ以外は Needs review。

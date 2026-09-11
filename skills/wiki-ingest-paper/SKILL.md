@@ -79,7 +79,10 @@ bash scripts/fetch-paper-pdf.sh "https://arxiv.org/abs/2501.01234"
 #   image_manifest=.raw/papers/arxiv-2501.01234/images/images.json
 #   figure_ids=<一意な図表 ID 数>
 #   figure_id_counts=Figure 1:3,Figure 2:1
+#   existing_sources=<同じ arXiv ID / DOI を持つ既存 source ページ(; 区切り)または空>
 ```
+
+**`existing_sources=` が空でなければ、その論文は既に wiki にある。** 新しい source ページを作らず、Step 2 以降を「既存ページの更新」として進める(本文の追記・図表の補完・`updated:` の更新。address は再採番しない)。同じ論文を別の会議版で読み直す(arXiv 版 → 出版社版)場合も、原則は既存ページに `url:` / `doi:` を足して 1 ページに保つ。別ページを立てる理由(別シリーズの読書会ノートなど)があるときだけ新規にし、双方の `related:` で結ぶ。照合は `scripts/paper-ids.py` の索引(`.vault-meta/paper-ids.json`)で行う。取り込み前に「重複なら止める」を強制したいときは `FETCH_FAIL_IF_EXISTS=1` を付けて呼ぶ(終了コード 4)。
 
 ヘルパーがやること:
 1. **入力解決**: `arxiv.org/abs|pdf` URL・裸の arXiv ID(`2501.01234`)→ `https://arxiv.org/pdf/<id>.pdf`。その他 https URL はそのまま。ローカル `.pdf` はコピー。
@@ -87,6 +90,7 @@ bash scripts/fetch-paper-pdf.sh "https://arxiv.org/abs/2501.01234"
 3. **テキスト抽出**: `pdftotext -layout` で `.raw/papers/<slug>.txt` を生成。これは**取り込み時に Read するため**のもので、wiki にそのまま貼らない。
 4. **画像抽出**: Mozilla `pdf.js`(`scripts/extract-paper-images.mjs`)で各ページを読み、`.raw/papers/<slug>/images/` に画像を保存する。operator list から取れる埋め込み raster 画像は `image-<page>-<seq>.png` として残す。ヘルパーが中間生成した `page-<page>.png` は、**この実行が作った images ディレクトリだけ**を対象に fetch が抽出直後に掃除する。エージェントは `page-*.png` を消さない。`find` / `python -c` で `images.json` を直さない。
 5. **メタ情報の手掛かり**: `arxiv_id` / `arxiv_html` / `year_hint`(arXiv ID から) / `pages` / `pdfinfo` のタイトル / `images_dir` / `images_count`(掃除後) / `image_manifest` / `figure_ids` / `figure_id_counts` を返す。
+6. **既存 source の照合**: arXiv ID または URL(doi.org を含む)を `scripts/paper-ids.py check` に当て、一致した既存ページを `existing_sources=` で返す(上記)。ローカル PDF は照合しない。
 
 ### サンドボックスとネットワーク
 
@@ -280,6 +284,8 @@ source_type: paper
 author: "1st Author ほか"
 date_published: YYYY-MM-DD          # 不明なら年だけ。arXiv は投稿日
 url: ""                             # 出版社版/arXiv abs の実在 URL のみ
+arxiv_id: "<id>"                    # fetch の arxiv_id= をそのまま(版番号なし)。arXiv に無い論文では行ごと省く
+doi: "10.xxxx/..."                  # 出版社版の DOI(小文字、doi.org/ を付けない)。不明なら行ごと省く
 confidence: high
 key_claims:
   - "論文の中心主張1(本文・図表に遡及可能なもの)"
@@ -370,7 +376,7 @@ python3 scripts/wiki-resolve.py entity:"<著者A>" entity:"<著者B>" entity:"<�
 python3 scripts/wiki-resolve.py concept:"<候補1>" concept:"<候補2>" concept:"<候補3>" --compact
 ```
 
-**単一論文で閉じる用語は source ページに留める。** concept を新設するのは、(a) resolve で既存がヒットしない、かつ (b) 2 ソース以上にまたがるか、今後またがることが明らかなハブのときだけ。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れた候補は Step 4 の log エントリに `Deferred:` 行として残し、次の関連ソースで育てる。
+**単一論文で閉じる用語は source ページに留める。** concept を新設するのは、(a) resolve で既存がヒットしない、かつ (b) 2 ソース以上にまたがるか、今後またがることが明らかなハブのときだけ。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れた候補は Step 4 の log エントリに `Deferred:` 行として残し、次の関連ソースで育てる。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。
 
 既存 concept を更新するときは全文を `Read` しない。`wiki-excerpt.py` で必要節だけ読む。**触る concept を並べて 1 回で読む**(ページ間は `=== <パス> ===` 行で区切られる)。
 

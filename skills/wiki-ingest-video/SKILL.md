@@ -248,7 +248,7 @@ transcript に質疑がある場合だけ作る。
 
 登壇者、組織、製品、システム、リポジトリ、データセットを `wiki/entities/` に作成・更新する。既存の有無は `wiki-resolve.py --type entity` で確認する。**共著者・一度きりの言及は `entity_tier: stub`**(frontmatter + 所属/役割 2〜3 行)。
 
-concept ページは、動画が扱う重要概念を `wiki/concepts/<原名>.md` に育てる。既存 concept は `wiki-resolve.py --type concept` で確認し、更新時は `wiki-excerpt.py --tail 15 --budget-tokens 1800` で必要節だけ読む。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れは Step 5 の log に `Deferred:` として残す。上限内で触れた concept だけ `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ。同じ受信箱)と `## 未解決の問い` を更新する。主題節と `## 定義` は ingest から書き換えない(conventions §8)。追記の前に `wiki-excerpt.py --outline` で既存の命題を見て、補強・反証する観察なら冒頭に `[節名]` を付ける。単一動画だけで言える事実は source ページに置き、複数ソースの突き合わせで見えた観察だけを受信箱に入れる。
+concept ページは、動画が扱う重要概念を `wiki/concepts/<原名>.md` に育てる。既存 concept は `wiki-resolve.py --type concept` で確認し、更新時は `wiki-excerpt.py --tail 15 --budget-tokens 1800` で必要節だけ読む。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れは Step 5 の log に `Deferred:` として残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。上限内で触れた concept だけ `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ。同じ受信箱)と `## 未解決の問い` を更新する。主題節と `## 定義` は ingest から書き換えない(conventions §8)。追記の前に `wiki-excerpt.py --outline` で既存の命題を見て、補強・反証する観察なら冒頭に `[節名]` を付ける。単一動画だけで言える事実は source ページに置き、複数ソースの突き合わせで見えた観察だけを受信箱に入れる。
 
 矛盾があれば黙って上書きせず `> [!contradiction]` callout を新旧両方に立てる。
 

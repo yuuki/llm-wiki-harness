@@ -3,6 +3,10 @@
 
 Pipeline (v1.7):
   query  →  bm25-index.py query (top-K candidates by BM25 over contextualized chunks)
+         →  graph channel     (wiki-graph.py: neighbours of the top BM25 pages by
+                              wikilink / shared-source edges, fused by RRF; only
+                              when .vault-meta/graph.json exists, --no-graph disables.
+                              An absent or empty graph leaves the output unchanged.)
          →  rerank.py        (cosine on nomic-embed-text vectors via ollama,
                               or no-op if ollama unavailable)
          →  drill            (return chunk pages with absolute paths so the
@@ -31,7 +35,9 @@ Output schema (JSON to stdout):
       "bm25_score": 7.12,
       "rerank_score": 0.81,
       "rerank_source": "cosine:nomic-embed-text",
-      "snippet": "... first 200 chars of the chunk ..."
+      "snippet": "... first 200 chars of the chunk ...",
+      "graph_score": 0.31,              # only on candidates the graph channel touched
+      "channels": ["graph"]             # only on candidates the graph channel added
     },
     ...
   ]
@@ -40,7 +46,10 @@ Output schema (JSON to stdout):
 Usage:
   retrieve.py "your query here"           # standard: BM25 top-20, rerank to top-5
   retrieve.py "query" --top 10            # change result count
-  retrieve.py "query" --no-rerank         # skip rerank, BM25-only
+  retrieve.py "query" --no-rerank         # skip rerank, BM25-only (+graph, RRF order)
+  retrieve.py "query" --no-graph          # skip the graph channel
+  retrieve.py "query" --graph-top 8 --graph-hops 2   # widen the graph channel
+  retrieve.py "query" --graph-people      # also let authors / organizations in via the graph
   retrieve.py "query" --explain           # include per-stage diagnostics
 
 Exit codes:
@@ -62,10 +71,13 @@ SCRIPTS_DIR = SCRIPT_DIR
 META_DIR = VAULT_ROOT / ".vault-meta"
 CHUNKS_DIR = META_DIR / "chunks"
 BM25_INDEX = META_DIR / "bm25" / "index.json"
+GRAPH_JSON = META_DIR / "graph.json"
 
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_NOT_PROVISIONED = 10
+
+RRF_K = 60
 
 
 def log(msg):
@@ -104,6 +116,92 @@ def chunk_snippet(chunk_data, max_chars=200):
     return text[:max_chars].rstrip() + "…"
 
 
+SKIP_SUBTYPES = frozenset({"person", "organization"})
+
+
+def graph_channel(graph_mod, graph, candidates, seeds_n, hops, top, address_of, skip_subtypes=SKIP_SUBTYPES):
+    """BM25 上位ページを種に近傍ページを取り、(追加候補, 既存候補への加点) を返す。
+
+    追加候補はそのページの chunk-000(冒頭 = 定義・要約)を代表にする。語彙が合わない
+    ページは BM25 では出ないが、隣接していれば rerank が意味で判定できる位置まで運ぶ。
+    著者・所属(entity_type person / organization)は source ページの隣にいつも居るが
+    主題の問いには答えないので、既定では追加候補にしない(--graph-people で含める)。
+    """
+    seed_pages = []
+    for c in candidates:
+        p = c.get("page_path")
+        if p and p not in seed_pages:
+            seed_pages.append(p)
+        if len(seed_pages) >= seeds_n:
+            break
+    if not seed_pages:
+        return [], {}
+    seeds = [(p, 1.0 / (i + 1)) for i, p in enumerate(seed_pages)]
+    bm25_pages = {c.get("page_path") for c in candidates}
+    neighbours = graph_mod.expand(graph, seeds, hops=hops, top=top + len(bm25_pages))
+    added, boosted = [], {}
+    for page, score in neighbours:
+        if page in bm25_pages:
+            boosted[page] = score
+            continue
+        if len(added) >= top:
+            continue
+        if (graph["nodes"].get(page) or {}).get("subtype") in skip_subtypes:
+            continue
+        addr = address_of(page)
+        if not addr:
+            continue
+        chunk_rel = Path(".vault-meta") / "chunks" / addr / "chunk-000.json"
+        chunk_path = VAULT_ROOT / chunk_rel
+        if not chunk_path.is_file():
+            continue
+        try:
+            chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        added.append({
+            "chunk_id": f"{addr}:0",
+            "page_address": chunk.get("page_address", addr),
+            "page_path": page,
+            "absolute_path": str((VAULT_ROOT / page).resolve()),
+            "chunk_index": chunk.get("chunk_index", 0),
+            "bm25_score": 0.0,
+            "graph_score": round(score, 4),
+            "channels": ["graph"],
+            "path": chunk_rel.as_posix(),
+            "snippet": chunk_snippet(chunk),
+        })
+    return added, boosted
+
+
+def rrf_fuse(candidates, added, boosted):
+    """BM25 順位とグラフ順位の Reciprocal Rank Fusion で候補を並べ直す。
+
+    グラフが何も足さず何も加点しなければ呼ばれない(出力は従来と同一)。
+    """
+    graph_rank = {}
+    ordered = sorted(
+        [(p, s) for p, s in boosted.items()] + [(c["page_path"], c["graph_score"]) for c in added],
+        key=lambda ps: -ps[1],
+    )
+    for rank, (page, _) in enumerate(ordered):
+        graph_rank.setdefault(page, rank)
+    fused = []
+    for rank, c in enumerate(candidates):
+        score = 1.0 / (RRF_K + rank)
+        page = c.get("page_path")
+        if page in graph_rank:
+            score += 1.0 / (RRF_K + graph_rank[page])
+            c["graph_score"] = round(boosted[page], 4)
+        fused.append((score, rank, c))
+    base = len(candidates)
+    for i, c in enumerate(added):
+        score = 1.0 / (RRF_K + graph_rank[c["page_path"]])
+        fused.append((score, base + i, c))
+    fused.sort(key=lambda t: (-t[0], t[1]))
+    return [c for _, _, c in fused]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Hybrid retrieval over the vault.")
     parser.add_argument("query", help="Natural-language query")
@@ -116,6 +214,16 @@ def main():
                         help="Include per-stage diagnostics in output")
     parser.add_argument("--allow-remote-ollama", action="store_true",
                         help="Forwarded to rerank.py")
+    parser.add_argument("--no-graph", action="store_true",
+                        help="Skip the graph channel even if .vault-meta/graph.json exists")
+    parser.add_argument("--graph-top", type=int, default=5,
+                        help="Max pages the graph channel may add (default 5)")
+    parser.add_argument("--graph-seeds", type=int, default=5,
+                        help="BM25 top pages used as graph seeds (default 5)")
+    parser.add_argument("--graph-hops", type=int, default=1, choices=(1, 2),
+                        help="Neighbourhood radius (default 1)")
+    parser.add_argument("--graph-people", action="store_true",
+                        help="Let the graph channel add person / organization entities too")
     args = parser.parse_args()
 
     if not BM25_INDEX.is_file():
@@ -152,6 +260,36 @@ def main():
             "snippet": chunk_snippet(chunk),
         })
 
+    graph_info = {"active": False}
+    if not args.no_graph and GRAPH_JSON.is_file() and candidates:
+        graph_mod = import_sibling("wiki_graph", "wiki-graph.py")
+        graph = graph_mod.load_graph(GRAPH_JSON)
+        if graph and not graph_mod.graph_is_empty(graph):
+            prefix_mod = import_sibling("contextual_prefix", "contextual-prefix.py")
+
+            def address_of(page):
+                node = graph["nodes"].get(page) or {}
+                if node.get("address"):
+                    return node["address"]
+                try:
+                    return prefix_mod.derive_synthetic_address(VAULT_ROOT / page)
+                except (ValueError, AttributeError):
+                    return None
+
+            added, boosted = graph_channel(
+                graph_mod, graph, candidates, args.graph_seeds, args.graph_hops, args.graph_top, address_of,
+                skip_subtypes=frozenset() if args.graph_people else SKIP_SUBTYPES,
+            )
+            graph_info = {
+                "active": True,
+                "seeds": min(args.graph_seeds, len({c["page_path"] for c in candidates})),
+                "added": [c["page_path"] for c in added],
+                "boosted": sorted(boosted, key=lambda p: -boosted[p]),
+            }
+            if added or boosted:
+                candidates = rrf_fuse(candidates, added, boosted)
+                log(f"graph: +{len(added)} page(s), {len(boosted)} boosted")
+
     if args.no_rerank:
         final = candidates[:args.top]
         strategy = "bm25-only"
@@ -166,6 +304,8 @@ def main():
         # Derive strategy from first candidate's rerank_source
         first_src = (final[0].get("rerank_source") if final else "unknown")
         strategy = f"bm25+rerank:{first_src}"
+    if graph_info["active"] and (graph_info["added"] or graph_info["boosted"]):
+        strategy += "+graph"
 
     # Dedupe by page (we may have multiple chunks of the same page; collapse to best)
     by_page = {}
@@ -188,6 +328,7 @@ def main():
             "post_rerank_count": len(final),
             "deduped_count": len(deduped),
             "bm25_top_param": args.bm25_top,
+            "graph": graph_info,
         }
 
     print(json.dumps(out, indent=2, ensure_ascii=False))

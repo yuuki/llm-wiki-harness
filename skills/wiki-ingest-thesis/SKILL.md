@@ -59,6 +59,7 @@ bash scripts/fetch-book.sh --raw-root .raw/theses "<pdf-url|local-pdf-path>" "<s
 ```
 
 - slug 例: 博士論文 `phd-<姓>-<年>-<短縮題>`(例 `phd-sigelman-2021-tracing`)、サーベイ `arxiv-<id>`。
+- **取得前に既存 source と照合する**: `python3 scripts/paper-ids.py check "<arxiv-url|doi>" --compact`。`HIT` なら同じ論文が既に(多くは 1 枚ものの paper source として)wiki にある。章分割で取り込み直すときは、旧ページの `related:` と被リンクを章ページやハブ entity へ張り替えてから旧ページを削除するか、残す理由を旧ページ冒頭に書く。放置すると lint の `## Paper IDs` に「1 枚ものと章分割の併存」として出続ける。
 - ダウンロードが egress 拒否で失敗したらサンドボックス無効化で再実行(`wiki-ingest-paper` の「サンドボックスとネットワーク」参照)。
 - **章検出の確認・`--chapters` 手動指定・アウトラインが無い PDF からの章境界復元・OCR スキャン PDF の扱いは、`wiki-ingest-book` Step 0 の「章検出の確認と失敗時のフロー」「アウトラインが無い PDF から章境界を復元する」にそのまま従う。**
 
@@ -221,7 +222,7 @@ related:
 
 ## Step 3: concept ページ(`wiki/concepts/`)
 
-conventions §8 のとおり(本文は主題別の節で再編纂が書く。ingest の追記先は `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ)と `## 未解決の問い` の 2 節。積み増し原則、contradiction callout。追記の前に `wiki-excerpt.py --outline` で既存の命題を見る)。既存 concept の有無は `wiki-resolve.py concept:"<候補1>" concept:"<候補2>" --compact` で候補語をまとめて確認し、更新時は触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800` で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。**1 文書バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。溢れは log の `Deferred:` に残す。固有の注記:
+conventions §8 のとおり(本文は主題別の節で再編纂が書く。ingest の追記先は `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ)と `## 未解決の問い` の 2 節。積み増し原則、contradiction callout。追記の前に `wiki-excerpt.py --outline` で既存の命題を見る)。既存 concept の有無は `wiki-resolve.py concept:"<候補1>" concept:"<候補2>" --compact` で候補語をまとめて確認し、更新時は触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800` で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。**1 文書バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。溢れは log の `Deferred:` に残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。固有の注記:
 
 - **サーベイの taxonomy 大分類は concept ページ候補の宝庫**であり、本スキルの主要な収穫。大分類 1 つが既存 concept と重なるなら積み増し、独立主題なら新設する。
 - サーベイの「未解決課題」節は、触れた concept の `## 未解決の問い` にそのまま還流させる(出典付き)。

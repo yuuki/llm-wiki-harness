@@ -9,7 +9,7 @@
   - `sources/` / `entities/` / `concepts/` / `questions/` / `surveys/` / `meta/`
   - `index.md` カタログ / `hot.md` 直近窓 / `log.md` 操作履歴 / `overview.md`
 - `.vault-meta/` — `mode.json` / `transport.json` / lock / address カウンタ
-- `scripts/` — カタログ・解決・抜粋・retrieve・原本取得
+- `scripts/` — カタログ・解決・抜粋・retrieve・原本取得に加え、矛盾索引・再編纂キュー・命題再検証・ページグラフ・concept 候補台帳・論文 ID・entity 名寄せ・関心要約・コンテキスト束・機械状態検査
 
 既存の一次ノート（`papers/` や `notes/` など）がある vault では、それらを ingest で書き換えない。wiki からは一方向参照だけにする。MOC への逆リンクは人間が承認したときだけ 1 件単位。
 
@@ -21,7 +21,7 @@
 4. `wiki/log.md` は先頭に追記する。過去エントリは編集しない。
 5. 新規の source / entity / concept は `bash scripts/allocate-address.sh` ではなく、`wiki-page-write.py` 経由で採番する（ヘルパー外の採番は失敗する）。
 6. ページ書き込みは `wiki-page-write.py` / `wiki-append.py`、または `wiki-lock.sh`。`wiki-catalog.py` は自己 lock するので包まない。
-7. `index.md` / `_index.md` / `log.md` / `hot.md` の全文を ingest / query の入力にしない。発見は `wiki-resolve.py`、本文は `wiki-excerpt.py`、カタログ更新は `wiki-catalog.py`、照会は `retrieve.py`。
+7. `index.md` / `_index.md` / `log.md` / `hot.md` の全文を ingest / query の入力にしない。発見は `wiki-resolve.py`、本文は `wiki-excerpt.py`、カタログ更新は `wiki-catalog.py`、照会は `retrieve.py`。長い引き継ぎは `wiki-context-pack.py`。lint の最初は `wiki-doctor.py`。
 
 ## skill の分担
 
@@ -33,14 +33,16 @@
 | スライド | `wiki-ingest-slides` | `.raw/slides/<slug>/` + wiki |
 | 動画 | `wiki-ingest-video` | 文字起こしを補助に wiki 化 |
 | 記事など一般ソース | `wiki-ingest` | `.raw/articles/` + wiki |
-| 単発の問い・1 ソースの解説・2 対象の差分 | `wiki-query` | 回答 + 任意で `wiki/questions/` |
+| 単発の問い・1 ソースの解説・2 対象の差分 | `wiki-query` | 回答 + 標準では `wiki/questions/`（save-first） |
+| 1 つの命題の判定（「〜は本当か」） | `wiki-thesis` | `wiki/questions/`（`type: thesis`） |
 | 設計空間・文献地図・対象の像 | `wiki-survey` | `wiki/surveys/` |
+| ギャップ・閉じなかった命題からの着想 | `wiki-ideate` | 承認後 `research/ideas/`（無いレイヤーなら `/tmp`） |
 | 外部読者向け清書 | `wiki-publish` | `notes/<domain>/` |
-| ページ衛生 | `wiki-lint` | `wiki/meta/lint-report-*.md` |
+| ページ衛生 | `wiki-lint` | `wiki/meta/lint-report-*.md`（冒頭に doctor） |
 | 構造的間隙の判定 | `wiki-gap` | `wiki/meta/gap-report-*.md` |
 | 概念の再編纂 | `wiki-refactor` | 対象の concept ページ |
 
-母集団が薄いときの `wiki-survey` は `wiki-ingest-*` または上流の `autoresearch` へ差し戻す。`wiki-query` へは戻さない。
+母集団が薄いときの `wiki-survey` は `wiki-ingest-*` または上流の `autoresearch` へ差し戻す。命題に触れる source が 2 本未満の `wiki-thesis` も同じ差し戻し（`insufficient`）。どちらも `wiki-query` へは戻さない。
 
 ## 概念ページ
 

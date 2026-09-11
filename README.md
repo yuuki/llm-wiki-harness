@@ -9,9 +9,9 @@
 入れる:
 
 - 媒体別 ingest（論文・書籍・博士論文・スライド・動画）と、vault 側で分岐した `wiki-ingest` / `wiki-query` / `wiki-lint`
-- `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor`
+- `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate`
 - 日本語整文（`japanese-tech-writing` と `conventions/japanese-style.md`）
-- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）
+- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `concept-candidates.py` / `paper-ids.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py`）
 - 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
 - 読み取り専用の Obsidian プラグイン `wiki-lens`
 
@@ -60,15 +60,16 @@ wiki/sources ──► wiki/entities
        └──► wiki/concepts（受信箱へ積む）
               │ wiki-refactor で主題節へ畳む
               ▼
-         wiki-query / wiki-survey
+         wiki-query / wiki-thesis / wiki-survey
               │
-              ├── wiki/questions
+              ├── wiki/questions（`type: question` / `type: thesis`）
               ├── wiki/surveys
+              ├── wiki-ideate → research/ideas/（無いレイヤーなら承認後も /tmp）
               └── wiki-publish → notes/（任意）
 
 見る: wiki-lens（書かない）
-判定: wiki-gap（lens の構造候補を、知識で振り分ける）
-衛生: wiki-lint
+判定: wiki-gap（lens の構造候補を、知識で振り分ける）→ 薄い実在ギャップは wiki-ideate
+衛生: wiki-doctor のあと wiki-lint
 ```
 
 入口は媒体、出口は設問の形で選ぶ。行数や文献本数では決めない。
@@ -84,7 +85,9 @@ wiki/sources ──► wiki/entities
 | 設問 | skill |
 |---|---|
 | 単発・1 ソース・2 対象の差分 | `wiki-query` |
+| 1 つの命題の判定（支持 / 反対 / 機序） | `wiki-thesis`（`wiki/questions/`、`type: thesis`） |
 | 設計空間・文献地図・対象の像 | `wiki-survey` |
+| ギャップや閉じなかった命題からの着想 1 本 | `wiki-ideate`（承認後 `research/ideas/`。無いレイヤーなら `/tmp`） |
 | wiki 外の読者へ | `wiki-publish` |
 
 ## 規約
@@ -93,7 +96,9 @@ wiki/sources ──► wiki/entities
 
 - [`conventions/conventions.md`](conventions/conventions.md) — ページ形式、出典、concept の受信箱と再編纂
 - [`conventions/japanese-style.md`](conventions/japanese-style.md) — 常体、カタカナ / 漢語 / 原語の寄せ方
-- [`conventions/token-discipline.md`](conventions/token-discipline.md) — resolve / excerpt / catalog / retrieve
+- [`conventions/token-discipline.md`](conventions/token-discipline.md) — resolve / excerpt / catalog / retrieve / context-pack
+
+関心の軸は任意の `profile.md`（`WIKI_PROFILE_PATH`、または `research/curation/profile.md` / `wiki/meta/profile.md`）を `wiki-profile.py` が要約する。無い vault では終了 3 になり、ingest / query は関心判定を飛ばす。
 
 既存ノートと共存させるときの原則（一次ノートを書き換えない、source に `@` を付ける）も conventions に残してある。別レイヤーが無い vault では、その節を読み飛ばしてよい。
 
@@ -137,6 +142,15 @@ vault に入れたあと、vault ルートで:
 python3 scripts/test_wiki_token_scripts.py
 python3 scripts/test_wiki_write_helpers.py
 python3 scripts/test_allocate_address.py
+python3 scripts/test_contradiction_index.py
+python3 scripts/test_recompile_queue.py
+python3 scripts/test_claim_audit.py
+python3 scripts/test_wiki_graph.py
+python3 scripts/test_concept_candidates.py
+python3 scripts/test_paper_ids.py
+python3 scripts/test_entity_resolve.py
+python3 scripts/test_wiki_profile.py
+python3 scripts/test_wiki_doctor.py
 ```
 
 `wiki-lens` は `cd plugins/wiki-lens && npm test`。

@@ -1,6 +1,6 @@
 ---
 name: wiki-gap
-description: "Validate structural gap candidates in the LLM wiki layer against human domain knowledge and recommend bridging literature. Consumes the Gap report copied from the wiki-lens Gap Finder view (or computes bridge candidates itself), judges which candidate connections are real knowledge gaps, recommends canonical papers to ingest, and verifies recommendations via the Semantic Scholar / arXiv APIs. Triggers on: gap analysis, wiki gap, validate gaps, ギャップ分析, 橋渡し文献, recommend bridging literature."
+description: "Validate structural gap candidates in the LLM wiki layer against human domain knowledge and recommend bridging literature. Consumes the Gap report copied from the wiki-lens Gap Finder view (or computes bridge candidates itself), judges which candidate connections are real knowledge gaps, recommends canonical papers to ingest, and verifies recommendations via arXiv / DBLP / Crossref (identifier-first; see bibliography-lookup.md). Triggers on: gap analysis, wiki gap, validate gaps, ギャップ分析, 橋渡し文献, recommend bridging literature."
 ---
 
 # wiki-gap: Gap Validation and Bridging-Literature Recommendation
@@ -49,36 +49,16 @@ For each **real-gap**, recommend literature in priority order:
 
 ## Step 4 — Verify via external APIs
 
-Verify every Tier 1 recommendation before it enters the report. **Privacy rule: queries may contain only concept names and candidate paper titles — never note contents, vault paths, or anything from `z99_private/`.**
+Verify every Tier 1 recommendation before it enters the report. Follow [`.claude/skills/bibliography-lookup.md`](../bibliography-lookup.md): identifier-first, arXiv / DBLP / Crossref. **Do not use the Semantic Scholar Graph API.** **Privacy rule: queries may contain only concept names and candidate paper titles — never note contents, vault paths, or anything from `z99_private/`.**
 
-Primary — Semantic Scholar Graph API, via the `bin/s2.sh` client. The script injects
-the API key from 1Password (`op read`) and enforces the documented **cumulative
-1 request/second across all endpoints** limit plus 429 backoff, so you don't hand-
-manage rate limiting:
-
-```bash
-bin/s2.sh search "<title or keywords>"          # fields default to title,year,externalIds,citationCount,url,abstract; limit 5
-bin/s2.sh paper  "<paperId|DOI:10..|ARXIV:1712.01208>"   # fields default to title,year,externalIds,citationCount,url
-```
-
-The script reads the key from `op://Private/Semantic Scholar API Key/s2-api-key`
-(override the vault segment with `S2_OP_REF`, or pre-supply `S2_API_KEY`). `op read`
-talks to the 1Password desktop app, so run these **outside the sandbox** (escalated
-execution) — the keyless public pool returns 429 almost immediately. If the key
-can't be fetched the script warns and falls back to keyless rather than aborting.
-
-Confirm: exact title, year, DOI / arXiv id. Use `citationCount` as canonicity evidence
-in the report. Fallback: arXiv API (`http://export.arxiv.org/api/query?search_query=all:"<title>"&max_results=3`,
-no key). If a host is blocked, surface the permission prompt to the user instead of
-working around it. A recommendation that cannot be verified stays in the report but
-keeps the **未検証** label — never fabricate identifiers.
+Confirm exact title, year, venue, and DOI or arXiv id. Treat venue (and whether the item is a survey) as canonicity evidence; do not use citation counts. A landing page (`arxiv.org/abs/…` or `doi.org/…`) is enough for a handful of items. If a host is blocked, surface the permission prompt instead of working around it. A recommendation that cannot be verified stays in the report but keeps the **未検証** label — never fabricate identifiers.
 
 ## Step 5 — Report
 
 Write `wiki/meta/gap-report-YYYY-MM-DD.md` (frontmatter mirrors the lint reports: `type: meta`, title, date, created/updated, tags `[YYYY/MM/DD, meta, gap]`, `status: developing`, related `[[index]]`). Structure:
 
 1. **Summary** — candidates received / verdict counts / recommendations verified.
-2. **実在ギャップ** — per gap: the two sides, structural evidence (score, common sources), 判定根拠, recommended literature with verified DOI/arXiv id + citationCount, and the suggested action (`wiki-ingest-paper <url>` for papers; 概念ページ間リンクの追記は推奨として記載するのみ).
+2. **実在ギャップ** — per gap: the two sides, structural evidence (score, common sources), 判定根拠, recommended literature with verified DOI/arXiv id and venue, and the suggested action (`wiki-ingest-paper <url>` for papers; 概念ページ間リンクの追記は推奨として記載するのみ).
 3. **弱い/意図的な分離** — one line each, so the next run doesn't re-litigate them.
 4. **未検証の推薦** — anything Step 4 could not confirm.
 5. **Coverage notes** — carried over from the plugin report.
@@ -88,5 +68,6 @@ Then `wiki-catalog.py prepend-log` in the existing format (`## [YYYY-MM-DD] gap-
 ## Boundaries
 
 - This skill recommends; it does not act. No edits to `wiki/{sources,entities,concepts,questions}/`, no ingestion, no link insertion. Hand off to `wiki-ingest-paper` only when the user picks a recommendation.
+- A **real-gap** row whose bridging literature is thin or absent (no canonical paper connects the two sides) is a research-idea seed, not only a reading gap. Say so in the report row (「着想の種: wiki-ideate へ」) and hand off to `wiki-ideate` when the user asks; this skill never drafts ideas itself.
 - Existing primary-layer notes (`papers/`, `research/`, `notes/`, `structures/`) are out of scope entirely.
 - API queries follow the privacy rule above; no other network use.

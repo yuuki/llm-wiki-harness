@@ -29,10 +29,17 @@ subagent に委譲するときは、この文書のパスと対象ページの�
 
 ## 1. 現状把握
 
+対象ページの選定と着手宣言は再編纂キュー(`.vault-meta/recompile-queue.json`、git 追跡)を通す。キューは compile 負債の走査結果に、状態(pending / in_progress / done / rejected / blocked / skipped)と試行履歴、人間の却下理由を重ねたものである。
+
 ```bash
+python3 scripts/recompile-queue.py refresh                  # 負債走査をキューへ同期(新規 pending、解消 done)
+python3 scripts/recompile-queue.py next --limit 5           # 優先順の候補。rejection_reasons を必ず読む
+python3 scripts/recompile-queue.py show "<page>"            # 対象ページの履歴と却下理由
+python3 scripts/recompile-queue.py mark "<page>" --state in_progress
 python3 scripts/wiki-excerpt.py "wiki/concepts/<page>.md" --outline
-python3 scripts/wiki-concept-stats.py --compile-debt --limit 50   # 対象ページの inbox_bullets / topic_sections / legacy_heading
 ```
+
+`rejection_reasons` が空でないページは、前回の再編纂が人間に却下されている。理由(例:「命題が観察の 1:1 言い換え」「出典を 2 件落とした」「節が 7 を超えた」)を作業メモの先頭に書き、同じ失敗を繰り返さない設計にしてから §2 へ進む。`blocked`(却下 3 回)のページは `next` に出ない。人間が `reopen` するまで着手しない。
 
 そのうえで対象ページを全文読み、次を書き出す(作業メモ。ページには書かない)。
 
@@ -159,6 +166,13 @@ sys.exit(1 if bad else 0)
 
 検査 1 が失敗したら、落ちた出典を該当命題の根拠へ戻す。検査 2 で自己言及が出たら書き直す。
 
+```bash
+# 4. 命題が出典に本当にあるか(自己検査)。全命題のパケットを出し、references/claim-audit.md §2 で判定する。
+python3 scripts/claim-audit.py sample --pages "$P" --per-page 50 > /tmp/claim-sample.json
+```
+
+検査 4 で `not_in_source` / `unsupported` が出た命題は、コミット前に命題を弱めるか `- 留保:` を足す(まだ同じコミットの中なので退避 callout の追加は不要)。判定は `python3 scripts/claim-audit.py record --verdicts /tmp/claim-verdicts.json` で台帳に残し、§7 で台帳も stage する。再編纂した本人が判定するので甘くなりやすい。命題の主語・数値・条件の 3 点を出典の抜粋と突き合わせ、抜粋に無い語が命題に入っていれば `not_in_source` にする。
+
 ---
 
 ## 7. 記録とコミット
@@ -176,12 +190,23 @@ EOF
 )"
 
 python3 scripts/wiki-retrieve-refresh.py --pages "wiki/concepts/<page>.md" --no-llm
+python3 scripts/recompile-queue.py mark "<page>" --state done
 
 git add "wiki/concepts/<page>.md" wiki/log.md
+git add -f .vault-meta/recompile-queue.json .vault-meta/claim-audit.json
+git add wiki/meta/claim-audit-*.md
 git commit -m "wiki: recompile <page>"
 ```
 
-対象ページと `wiki/log.md` 以外を stage しない。vault には無関係な未コミット変更が常にあるので `git add -A` を使わない。
+対象ページ・`wiki/log.md`・キュー以外を stage しない。vault には無関係な未コミット変更が常にあるので `git add -A` を使わない。キューは `.gitignore` 配下なので `-f` が要る(`mode.json` と同じ扱い)。
+
+**却下されたとき**: 人間が再編纂結果を差し戻したら、コミットを revert するかページを戻したうえで、理由を一文でキューに残す。理由は次の試行が §1 で読む。
+
+```bash
+python3 scripts/recompile-queue.py mark "<page>" --state rejected --by human --reason "命題が観察の 1:1 言い換えで圧縮になっていない"
+```
+
+3 回却下されたページは `blocked` になり、`next` から外れる。構造の問題(親子化が先、主題が立たない)なら `--state skipped --reason` で当面外す。
 
 記録の数え方: 「N 観察」は受信箱(旧名・規約外の節を含む)から畳んだ箇条書きの総数、「M 命題」は再編纂後の主題節にある太字命題の総数(既存節に足した分も含む)。観察と命題は 1 対 1 ではない(複数観察が 1 命題の複数根拠になる、1 観察が 2 命題に分かれる)。M は暗算しない。log を書く直前に次を実行し、出力の整数をそのまま貼る。log は追記専用なので、数え違いを後から直せない。
 
@@ -200,7 +225,7 @@ print(sum(int(n) for n in re.findall(r'\((\d+) 命題\)', sys.stdin.read())))
 
 - 畳み込み比(N 観察 → M 命題 / K 主題節)と主題節名
 - 受信箱に残した件数と理由
-- 検査 1〜3 の結果(落ちた出典 0、自己言及 0、汎用見出し 0、compile 負債から消えたか)
+- 検査 1〜4 の結果(落ちた出典 0、自己言及 0、汎用見出し 0、compile 負債から消えたか、命題の再検証の内訳と手当て)
 - 親子化候補として報告すべき事項(主題が 7 を超えそう、子ページが要りそう)
 - 規約側に見つけた不備(手順どおりに進まなかった箇所)
 

@@ -105,6 +105,7 @@ Use these decisions consistently:
 - **圧縮**: A concept is mostly single-source fact listing. Keep only the definition, cross-source insight if any, unresolved questions, and source pointers.
 - **補完**: A page is a lint stub, lacks required headings, has missing `sources`, stale indexes, weak related links, or unresolved wikilinks. Repair without inventing unsupported claims.
 - **再編纂 (recompile)**: The inbox (`## 未編纂の観察` / legacy `## 横断的知見`) holds 5+ observations, or the page has no topic section and 15+ observations (`wiki-concept-stats.py --compile-debt`). Fold the inbox into topic-section claims, rewrite the `## 定義` summary paragraph on hubs, and leave the three traces required by conventions §8 update rule 4 (git commit, `log.md` entry, folded originals parked in a collapsed `> [!note]- 編纂前の観察 YYYY-MM` callout). Full procedure: [`references/recompile.md`](references/recompile.md). This is the **only** decision that may rewrite, merge, reorder, or delete existing items; ingest never does.
+- **再検証 (claim audit)**: Sample bold propositions from topic sections and check that the cited source pages actually say what the proposition says (`supported` / `unsupported` / `not_in_source` / `source_missing` / `unclear`). Run it as the last recompile check on the page just recompiled, and periodically from lint on recently recompiled or random pages. Findings get a `- 留保: 再検証 YYYY-MM-DD — …` line or a weakened proposition, never a silent rewrite. Procedure: [`references/claim-audit.md`](references/claim-audit.md).
 
 Prefer preserving provenance over producing a neat taxonomy. When evidence is weak, state the uncertainty in `## 未解決の問い` rather than smoothing it away.
 
@@ -113,10 +114,12 @@ Prefer preserving provenance over producing a neat taxonomy. When evidence is we
 1. **Inventory**
    - Prefer `python3 scripts/wiki-concept-stats.py --json` for hub candidates, long pages, and structural debt over reading index files.
    - `python3 scripts/wiki-concept-stats.py --compile-debt [--min-inbox N]` lists recompile candidates sorted by inbox size (`inbox_bullets`, `topic_sections`, `legacy_heading`).
+   - `python3 scripts/recompile-queue.py refresh && python3 scripts/recompile-queue.py next --limit 5` is the persistent form of the same scan: `.vault-meta/recompile-queue.json` (git-tracked) keeps per-page state, attempt history, and human rejection reasons. Pick recompile targets from `next`, never from a fresh `--compile-debt` alone, so a page rejected last time is retried with its reasons in hand and a page rejected three times (`blocked`) is not retried at all.
    - `python3 scripts/wiki-excerpt.py <page> --outline` shows a page's shape (headings, bullet counts, bold claim lines) without body text.
    - List concept files with `rg --files wiki/concepts -g '*.md'`.
    - Count long pages, missing required headings, empty or missing `sources`, `lint-stub` tags, duplicate index rows, and dead wikilinks.
    - Identify duplicates with `wiki-resolve.py`, aliases, source overlap, and repeated related links.
+   - For entities, `python3 scripts/entity-resolve.py scan --min-tier medium` lists same-person / same-organization page pairs (strong: normalized title or alias collision; medium: initial vs full given name, word order, parenthesised acronym, shared short acronym; weak: spelling drift). `plan --keep A --drop B` prints the aliases to carry over, the related to merge, and every page linking to the drop side. Record the outcome with `decide --merged` or `decide --rejected --reason` so the pair stops reappearing (ledger `.vault-meta/entity-merges.json`, staged with `git add -f`). Shared short acronyms (`KIT`, `CSU`) are usually two organisations: remove the alias on one side instead of merging.
 
 2. **Design the refactor**
    - Produce a short action table before editing: action, target pages, reason, expected index/log changes, and deletion risk.
@@ -198,6 +201,7 @@ Recompile entries name the page, the fold ratio, and the resulting sections:
 - Do not make every page a parent page. Parent pages are maps; children are concrete arguments.
 - Do not hide contradictions by merging prose. Use contradiction callouts or unresolved questions.
 - Do not recompile from an ingest session, and do not batch several pages into one recompile commit. One page = one commit.
+- Do not start a recompile without `recompile-queue.py mark <page> --state in_progress`, and do not close one without `--state done`; a rejection with no `--reason` is useless to the next attempt.
 - Do not drop a `(Source: ...)` while folding. Every claim keeps every source its folded observations cited.
 - Do not rewrite topic sections during 統合 / 親子化 / 分解 without also applying the recompile traces; structural moves that reword claims are recompiles.
 - Do not let index summaries contain nested wikilinks that break list parsing.

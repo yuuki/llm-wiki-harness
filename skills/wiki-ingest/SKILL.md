@@ -372,7 +372,7 @@ Run `--outline` first; if the new observation supports or contradicts an existin
 
 ### Concept limits per ingest
 
-- **Max 3 new** concept pages, **max 5 updates**. Overflow → log as `Deferred:` in the log entry; grow on the next related source.
+- **Max 3 new** concept pages, **max 5 updates**. Overflow → log as `Deferred:` in the log entry; grow on the next related source. Also record each overflow candidate in the ledger: `python3 scripts/concept-candidates.py add --name <candidate> --source "[[@<this source>]]" --reason "cap exceeded"`. If `wiki-resolve.py` answered `ledger:<name>(<k> docs, pending)` the name is already waiting: add the mention with the same command, and if it is `ready` (2 independent documents) create it first within this ingest's new-concept budget and `promote` it (conventions §12 rule 5). When torn between creating and deferring, check `python3 scripts/wiki-profile.py` (a 25-line digest; do not Read the profile file itself; exit 3 means skip interest gating): out-of-scope terms stay on the source page, core-interest candidates get created first at their second document (conventions §12 rule 3).
 - **Create threshold**: single-source terms stay on the source page. Create a concept only when resolve misses AND the term will cross sources (or is an obvious future hub).
 - **Hub concepts** (have `## 子概念` or are huge): write insight to the nearest child, not the parent — unless the insight spans children.
 

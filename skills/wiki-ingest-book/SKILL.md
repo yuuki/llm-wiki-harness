@@ -405,7 +405,7 @@ Simon は同書第 2 版序文で「私の主張のうち彼が同意しない�
 python3 scripts/wiki-resolve.py concept:"<候補1>" concept:"<候補2>" concept:"<候補3>" --compact
 ```
 
-**1 書籍バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。溢れた候補は Step 4 の log に `Deferred:` 行として残す。既存 concept を更新するときは全文を `Read` せず、触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800`(必要なら `--outline`)で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。
+**1 書籍バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。溢れた候補は Step 4 の log に `Deferred:` 行として残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。既存 concept を更新するときは全文を `Read` せず、触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800`(必要なら `--outline`)で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。
 
 規約は conventions §8 と §12 のとおり: concept の本文は主題別の節(再編纂が書く。**主題節を書き換えない**)で、ingest の追記先は `## 未編纂の観察`(**2 つ以上のソースの突き合わせで見えた観察だけ**。旧名 `## 横断的知見` が残るページではそこ)と `## 未解決の問い` の 2 節。**上限内で触れた** concept のこの 2 節を更新する。追記の前に `wiki-excerpt.py --outline` で既存の命題を見て、補強・反証する観察なら冒頭に `[節名]` を付ける。積み増し原則(ingest は既存項目を書き換えない)。矛盾は `> [!contradiction]` callout を両ページに。
 

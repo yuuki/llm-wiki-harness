@@ -31,9 +31,17 @@ python3 scripts/retrieve.py "<the user's question verbatim>" --top 5   # Deep: -
 python3 scripts/wiki-excerpt.py "<absolute_path from candidate>" --tail 15 --budget-tokens 1800
 ```
 
-Output is JSON with a `candidates` array. Each candidate has `absolute_path`, a `snippet`, and `bm25_score` + `rerank_score`. Excerpt each candidate page — do **not** Read full fat concept pages.
+Output is JSON with a `candidates` array. Each candidate has `absolute_path`, a `snippet`, and `bm25_score` + `rerank_score`. When the page graph is built (`.vault-meta/graph.json`), candidates also carry `channels` (`["bm25"]`, `["graph"]`, or both) and the `strategy` string ends in `+graph`; a `["graph"]`-only candidate is a link / co-citation neighbour of the lexical hits that the query never named — excerpt it like any other, but cite it only if its excerpt actually answers the question. Excerpt each candidate page — do **not** Read full fat concept pages.
 
 If `retrieve.py` exits 10 (feature not provisioned), fall back to `wiki-resolve.py` + `rg`, then excerpt. Never Read `wiki/index.md` as fallback.
+
+When the question asks whether two things conflict (矛盾 / 対立 / 食い違い / 両立 / どちらが正しい), also query the contradiction index before excerpting — it returns every `> [!contradiction]` callout whose text or wikilinks match all terms, with host page, section, and a status guess:
+
+```bash
+python3 scripts/contradiction-index.py --query <語1> [<語2> ...] --limit 10
+```
+
+Cite the host page and quote the callout; if `status` is `open`, say so instead of resolving it yourself. If the index has no hit, the wiki has not recorded that disagreement — say that explicitly rather than inferring one.
 
 Quick mode skips retrieval (trimmed hot window only — see Quick Mode below).
 
@@ -74,7 +82,7 @@ Do not open individual wiki pages in quick mode.
 3. If retrieve exits 10, fall back to `python3 scripts/wiki-resolve.py "<term>" --type any` + `rg`, then excerpt hits.
 4. Follow wikilinks from excerpts to depth-2 for key entities (excerpt those too). No deeper.
 5. **Synthesize** the answer in chat. Cite sources with wikilinks: `(Source: [[Page Name]])`.
-6. **Offer to file** the answer: "This analysis seems worth keeping. Should I save it as `wiki/questions/answer-name.md`?"
+6. **File by default** (save-first). A standard answer that synthesises two or more pages is saved to `wiki/questions/` without asking (see *Filing Answers Back*). Skip the save only when: the user said not to, the answer is a bare fact lookup, the answer is "not in the wiki" (go to Gap Handling), or one existing page already answers it verbatim (then link that page instead of duplicating). Say in one line where it was filed.
 7. If the question reveals a **gap**: say "I don't have enough on X. Want to find a source?"
 
 ---
@@ -91,8 +99,9 @@ Do not route back. If `wiki-survey` finds the population too thin, its own gate 
 2. **Excerpt** every candidate and follow wikilinks to related concepts, entities, and sources (excerpt those too — never Read full pages).
 3. If retrieve exits 10, fall back to `wiki-resolve.py` + `rg`, then excerpt.
 4. If wiki coverage is thin, offer to supplement with web search.
+4b. Frame the synthesis with `python3 scripts/wiki-profile.py` (25-line digest; never Read the profile file itself). Follow the profile's 評価の癖. If the script exits 3 (no profile in this vault), skip framing. Standard mode skips this step.
 5. Synthesize a comprehensive answer with full citations.
-6. Always file the result back as a wiki page. Deep answers are too valuable to lose.
+6. Always file the result back as a wiki page (same procedure as standard; no opt-out short of the user saying so). Deep answers are too valuable to lose.
 
 ---
 
@@ -121,7 +130,7 @@ If the trimmed hot window has the answer (quick mode), respond without reading f
 
 Good answers compound into the wiki. Don't let insights disappear into chat history.
 
-When filing an answer, save to `wiki/questions/<title>.md`:
+When filing an answer:
 
 ```yaml
 ---
@@ -140,7 +149,9 @@ status: developing
 ---
 ```
 
-Then write the answer as the page body. Include citations. Link every mentioned concept or entity.
+Then write the answer as the page body. Include citations. Link every mentioned concept or entity. Write through `python3 scripts/wiki-page-write.py "wiki/questions/<title>.md" --content-file /tmp/answer.md` (allocates the address, validates frontmatter, takes the lock); never write the file directly. Frame the title as the question in Japanese 常体 (`〜か`), not as a topic. Quick mode never files.
+
+**Close the loop on the concept side.** If the answer settles a bullet under a concept's `## 未解決の問い`, remove it and leave the trace: `python3 scripts/wiki-append.py "wiki/concepts/<concept>.md" --remove-question-containing "<問いの語>" --observation "[<主題節名>] <一文の答え> (回答 [[<question page>]])"`. If the answer raises a new open question, append it with `--question`. If the answer is really a *judgment on a proposition* (supported / contradicted with evidence on both sides), hand off to `wiki-thesis` instead of filing a `question` page.
 
 After filing, update catalogs via scripts — do not Read+Edit `wiki/index.md` or `wiki/log.md`:
 

@@ -100,7 +100,7 @@ SKIP_DIR_NAMES = frozenset({"node_modules"})
 
 KNOWN_TYPES = frozenset({
     "source", "entity", "concept", "question", "comparison",
-    "meta", "survey", "fold", "overview",
+    "meta", "survey", "fold", "overview", "thesis",
 })
 CATALOG_RELS = ("wiki/index.md", "wiki/hot.md", "wiki/log.md")
 
@@ -538,6 +538,7 @@ def check_frontmatter(rel, fm, report, opts, is_tracked):
         if source_type == "thesis" and publish == "false":
             report.warn("FM-PUBLISH",
                         "thesis に `publish: false` は不要(conventions §10-3)", rel)
+        check_paper_ids(rel, fm, report, source_type)
     elif page_type == "entity":
         if scalar(fm, "entity_type") is None:
             report.error("FM-ETYPE", "entity に entity_type が無い(conventions §3)", rel)
@@ -545,6 +546,36 @@ def check_frontmatter(rel, fm, report, opts, is_tracked):
         for key in ("complexity", "domain"):
             if scalar(fm, key) is None:
                 report.error("FM-CFIELD", "concept に %s が無い(conventions §3)" % key, rel)
+
+
+ARXIV_ID_VALUE_RE = re.compile(r"^\d{4}\.\d{4,5}$")
+ARXIV_IN_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf|html)/(\d{4}\.\d{4,5})", re.I)
+DOI_VALUE_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+DOI_IN_URL_RE = re.compile(r"doi\.org/(10\.\d{4,9}/\S+)", re.I)
+
+
+def check_paper_ids(rel, fm, report, source_type):
+    """conventions §3 の書誌 ID。paper で url から導出できるのに frontmatter に無いものは WARN
+    (scripts/paper-ids.py backfill で埋まる)。形式の誤りは ERROR。"""
+    arxiv_id = scalar(fm, "arxiv_id")
+    doi = scalar(fm, "doi")
+    if arxiv_id is not None and not ARXIV_ID_VALUE_RE.match(arxiv_id):
+        report.error("FM-ARXIV", "arxiv_id は版番号なしの `YYMM.NNNNN` にする: %r" % arxiv_id, rel)
+    if doi is not None:
+        if doi.lower().startswith(("http", "doi:")):
+            report.error("FM-DOI", "doi は `10.xxxx/...` だけを書く(doi.org/ や doi: を付けない): %r" % doi, rel)
+        elif not DOI_VALUE_RE.match(doi):
+            report.error("FM-DOI", "doi が `10.xxxx/...` 形式でない: %r" % doi, rel)
+        elif doi != doi.lower():
+            report.warn("FM-DOI", "doi は小文字に揃える(paper-ids.py の照合キー): %r" % doi, rel)
+    if source_type != "paper":
+        return
+    url = scalar(fm, "url") or ""
+    if arxiv_id is None and ARXIV_IN_URL_RE.search(url):
+        report.warn("FM-ARXIV", "url に arXiv ID があるのに arxiv_id が無い(conventions §3。"
+                    "`paper-ids.py backfill --write --pages` で埋まる)", rel)
+    if doi is None and DOI_IN_URL_RE.search(url):
+        report.warn("FM-DOI", "url が doi.org なのに doi が無い(conventions §3)", rel)
 
 
 def scalar(fm, key):

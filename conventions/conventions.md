@@ -45,7 +45,7 @@ Navigation: [[index]] | [[overview]]
 
 ```yaml
 ---
-type: source            # source|entity|concept|question|comparison|meta
+type: source            # source|entity|concept|question|thesis|comparison|survey|meta
 title: "人間可読タイトル"
 date: 2026-06-02 18:46   # 既存規約(必須): 作成日時 YYYY-MM-DD HH:mm
 created: 2026-06-02      # wiki 標準: YYYY-MM-DD
@@ -75,6 +75,8 @@ source_type: paper      # article|video|podcast|paper|book|slides|transcript|dat
 author: ""
 date_published: YYYY-MM-DD
 url: ""
+arxiv_id: "2405.16444"  # paper: arXiv の版番号なし ID。url / .raw slug / 本文から機械導出できる(scripts/paper-ids.py backfill)
+doi: "10.1145/3689031.3696098"  # paper: 小文字 DOI(doi.org/ は付けない)。arXiv しか無い論文には付けない
 confidence: high        # high|medium|low
 key_claims: []
 
@@ -88,7 +90,17 @@ first_mentioned: "[[ソース要約]]"
 complexity: intermediate # basic|intermediate|advanced
 domain: ""
 recompiled: YYYY-MM-DD   # 最終再編纂日(§8 更新ルール 6)。再編纂だけが更新する。未再編纂のページには無い
+
+# thesis(wiki/questions/ に置く。wiki-thesis が書く命題の判定ページ)
+thesis: "命題の逐語"
+question: "元の問いの逐語"     # 問いから命題を起こしたときだけ
+verdict: supported       # supported|partially|contradicted|insufficient|mixed
+confidence: medium       # high|medium|low。直接の根拠 3 本以上で high、1〜2 本で medium、間接だけなら low
+origin: "[[concept]]"    # `## 未解決の問い` から起こしたときの出自ページ
+judged: YYYY-MM-DD       # 判定日。判定を見直したら更新する
 ```
+
+thesis ページの判定は「命題が真か」ではなく「wiki のソースが命題をどこまで支持するか」である。本文は 根拠表(側 / 要約 / 出典 / 強さ)・機序・判定・反証条件・差し戻し の節を固定で持つ。insufficient は `autoresearch` / `wiki-ingest-*` への差し戻しであり、web で埋めない。手順は `wiki-thesis` skill。
 
 ## 4. ファイル名
 
@@ -110,6 +122,8 @@ recompiled: YYYY-MM-DD   # 最終再編纂日(§8 更新ルール 6)。再編纂
 - 出典の優先度: **Slides > Official Page > Audio/Video Transcript > Extracted PDF Text**。
 - source ページの `key_claims` と本文の主張は、`sources:` frontmatter・`## 出典`・raw ソースへのリンクから遡及可能にする。source 自身に由来する本文と画像キャプションには、冗長な `(Source: …)` インライン引用を付けない。外部ソースとの比較、矛盾、source 自身から遡及できない主張には明示的な出典リンクを付ける。entity / concept ページの出典表記はこの省略ルールの対象外である。
 - 矛盾は黙って上書きせず `> [!contradiction]` callout で両ページに明示。
+- 矛盾の索引は `python3 scripts/contradiction-index.py --write` が [[contradictions]](`wiki/meta/contradictions.md`)に生成する(lint が再生成する。手で編集しない)。状態(未決着 / 説明済み)は本文の見出し語からの推定であり、callout 本文に `(status: explained)` または `(status: open)` を書けば上書きできる。片側にしか callout が無い頁対は lint が候補として報告する。query は `--query <語>...` で「X と Y は矛盾するか」に索引を使う。
+- 主題節の命題は**再検証**の対象である。`python3 scripts/claim-audit.py sample` が命題と、命題が引く source ページの該当段落を対にして出し、判定(supported / unsupported / not_in_source / source_missing / unclear)を台帳 `.vault-meta/claim-audit.json` と `wiki/meta/claim-audit-YYYY-MM-DD.md` に残す。出典に無い・食い違う命題は黙って直さず、`- 留保: 再検証 YYYY-MM-DD — …` を足すか、再編纂の痕跡(§8 更新ルール 4)を残して命題を弱める。手順は `wiki-refactor` の `references/claim-audit.md`。
 
 ## 6. 既存資産との橋渡し(一方向参照の原則)
 
@@ -149,7 +163,7 @@ concept ページは、複数ソースを横断した知識を compile した**�
 
 ## 未解決の問い
 - 次に調べるべき問いを箇条書きで蓄積する作業リスト。
-- 解決したら本節から落とし、知見になったものは主題節へ、独立に答える価値があれば `wiki/questions/`(単発回答)または `wiki/surveys/`(長編編纂)へ昇格させる。
+- 解決したら本節から落とし、知見になったものは主題節へ、独立に答える価値があれば `wiki/questions/`(単発回答)または `wiki/surveys/`(長編編纂)へ昇格させる。問いを**判定で閉じる**手続きは `wiki-thesis`(`type: thesis`。問いを命題に直し、支持 / 反対 / 機序 / メタ / 隣接で根拠を集めて判定する)。judged 済みの問いは本節から落とし、`## 未編纂の観察` に判定ページへのリンクつきで 1 行残す(主題節へ畳むのは再編纂)。insufficient の問いは落とさず、判定ページへのリンクと不足を末尾に足す。
 
 ## 未編纂の観察
 - ingest の**唯一の追記先**。新ソースと既存ソースの突き合わせで見えた観察を、対比のまま末尾へ積む。
@@ -181,7 +195,7 @@ concept ページは、複数ソースを横断した知識を compile した**�
 3. 1 ソース目から育て始める(観察は 2 ソース目以降に増えるのが普通だが、定義時点で見えた問いは未解決の問いに入れておく)。
 4. **「黙って上書きしない」は「書き換えない」ではなく「痕跡なしに書き換えない」と読む。** ingest は既存項目を書き換えず積み増すだけ(ここは従来どおり)。既存項目の統合・言い換え・並べ替え・削除は**再編纂(recompile)の工程だけ**に許す(専用 skill ができるまでは `wiki-refactor` の一様式として行う)。再編纂は次の 3 点を痕跡として必ず残す: (a) git の履歴(1 再編纂 = 1 コミット)、(b) `wiki/log.md` への「N 件の観察を M 件の主張へ畳み込んだ」エントリ、(c) 畳み込んだ元の箇条書きを同ページ内の折り畳み callout(`> [!note]- 編纂前の観察 YYYY-MM`)へ退避。退避 callout は次回の再編纂で削除してよい。書き換え後の各主張にも `(Source: ...)` を必ず引き継ぎ、根拠を伴わない主張を再編纂で生まない。矛盾の扱い(§5 の contradiction callout)はこの読み替えの対象外で、再編纂でも矛盾を散文に溶かして消さない。
 5. **行数を理由に追記を見送らない**。concept の 300 行は上限ではなく分割を検討する目安であり、積み増し原則が優先する(§7)。ページが厚くなったら、追記を諦めるのではなく主題を切り出して分割するか、再編纂(上記 4)で畳み込む。
-6. **再編纂(recompile)の発火と内容**。`python3 scripts/wiki-concept-stats.py --compile-debt` が、受信箱(`## 未編纂の観察`、旧名 `## 横断的知見` を含む)の箇条書きが 5 件以上、または主題節を 1 つも持たないまま観察が 15 件以上のページを compile 負債として列挙する。再編纂は (1) 受信箱の観察を主題節の命題へ畳み込み(既存命題の補強・反証・精緻化、または新命題)、(2) 主題節の規則 1〜6 に沿って見出しと命題文を整え、(3) ハブなら `## 定義` の要約段落を書き直し、(4) 更新ルール 4 の痕跡 3 点を残す。手順は `wiki-refactor` skill の再編纂様式に従う。再編纂は ingest の途中で行わず、独立した作業単位(1 ページ = 1 コミット)とする。
+6. **再編纂(recompile)の発火と内容**。`python3 scripts/wiki-concept-stats.py --compile-debt` が、受信箱(`## 未編纂の観察`、旧名 `## 横断的知見` を含む)の箇条書きが 5 件以上、または主題節を 1 つも持たないまま観察が 15 件以上のページを compile 負債として列挙する。再編纂は (1) 受信箱の観察を主題節の命題へ畳み込み(既存命題の補強・反証・精緻化、または新命題)、(2) 主題節の規則 1〜6 に沿って見出しと命題文を整え、(3) ハブなら `## 定義` の要約段落を書き直し、(4) 更新ルール 4 の痕跡 3 点を残す。手順は `wiki-refactor` skill の再編纂様式に従う。再編纂は ingest の途中で行わず、独立した作業単位(1 ページ = 1 コミット)とする。負債の走査結果は `python3 scripts/recompile-queue.py refresh` が再編纂キュー(`.vault-meta/recompile-queue.json`、git 追跡)へ同期し、ページごとの状態(pending / in_progress / done / rejected / blocked / skipped)と試行履歴、人間の却下理由を持つ。対象は `next` から選び、着手時に `mark --state in_progress`、完了時に `--state done`、人間が差し戻したら `--state rejected --reason` で理由を残す(次の試行が読む)。却下 3 回で `blocked` になり、人間が `reopen` するまで候補に出ない。
 
 ## 9. 書籍(book)ソース
 
@@ -212,15 +226,20 @@ concept ページは、複数ソースを横断した知識を compile した**�
 - 既存ページの有無: `python3 scripts/wiki-resolve.py`
 - 本文: `python3 scripts/wiki-excerpt.py`
 - 索引・ホット・ログの更新: `python3 scripts/wiki-catalog.py`(ファイルを Read して Edit しない)
-- query の第一経路: `python3 scripts/retrieve.py`
-- ingest 後: `python3 scripts/wiki-retrieve-refresh.py --pages ... --no-llm`
+- query の第一経路: `python3 scripts/retrieve.py`(ページグラフがあれば第 3 路。`wiki-graph.py`)
+- ingest 後: `python3 scripts/wiki-retrieve-refresh.py --pages ... --no-llm`(BM25 と `graph.json` を差分更新)
+- 関心の要約: `python3 scripts/wiki-profile.py`(無い vault では終了 3。判定を飛ばす)
+- 束: `python3 scripts/wiki-context-pack.py`(subagent への引き継ぎ)
+- 機械状態: `python3 scripts/wiki-doctor.py`(lint の最初)
 
 ## 12. entity の stub と concept の新設閾値
 
 1. **entity stub**: 初出の共著者・一度きりの人物/組織は `entity_tier: stub` で、frontmatter と所属/役割 2〜3 行だけを書く。本文節を増やさない。
 2. **entity full**: 同一 entity が 2 つ目のソースに現れたら `entity_tier: full` へ上げ、通常の本文を育てる。書籍・thesis のハブ entity、繰り返し登場する組織/製品は最初から full でよい。
-3. **concept 新設**: 単一ソースで閉じる用語は source ページに留める。concept を新設するのは、resolve で既存が無く、かつ 2 ソース以上にまたがるか今後またがることが明らかなときだけ。
+3. **concept 新設**: 単一ソースで閉じる用語は source ページに留める。concept を新設するのは、resolve で既存が無く、かつ 2 ソース以上にまたがるか今後またがることが明らかなときだけ。迷う候補は研究関心プロファイルの要約(`python3 scripts/wiki-profile.py`。`WIKI_PROFILE_PATH`、なければ `research/curation/profile.md`、なければ `wiki/meta/profile.md`)に照らす。プロファイルが無い vault では関心判定を飛ばす。対象外に当たる用語は concept にせず source に留め、コア関心に当たる候補は 2 文書目で優先して新設する。プロファイルは「作るか」を決める材料であり、「何を書くか」は source に従う。
 4. **1 取り込みの上限**: concept は新規最大 3、更新最大 5。この上限は §8 の「触れたら更新」より優先する。溢れた候補は log の `Deferred:` に書き、次の関連ソースで育てる。書籍・thesis も文書全体でこの上限を目安にする(章ごとにリセットしない)。
+5. **候補の台帳**: 溢れた候補と「2 ソース目を待つ」候補は、log の `Deferred:` に加えて `python3 scripts/concept-candidates.py add --name <候補> --source "[[@...]]" --reason "<保留理由>"` で `.vault-meta/concept-candidates.json`(git 追跡)にも積む。独立 source 数は文書単位で数える(同じ書籍の章 2 つは 1 本)。`wiki-resolve.py` が concept を見つけられずに `ledger:<名>(<k> docs, pending)` を返したら、その候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する。concept にしないと決めたら `reject --reason`。lint が到達済み候補を報告する。
+6. **entity の alias は本人・当該組織を指す名前だけ**: 英名と和名、正式名と略称(`Massachusetts Institute of Technology` と `MIT`)、綴りゆれは alias にする。姓だけ・`Y. Li` 型の引用表記は同姓の別人と衝突するので alias にしない(あっても名寄せでは無視する)。親組織のページに子組織や別ページの題名を alias として置かない(`Microsoft` に `Microsoft Research` を置くと resolve が衝突する)。同一 entity の別ページは `python3 scripts/entity-resolve.py scan` が strong / medium / weak の候補対として出し、統合は wiki-refactor の「統合」手順(残す側に旧題名を alias、wikilink を張り替え、参照ゼロで削除)で人間が承認して行う。別人の同姓同名は `entity-resolve.py decide --rejected --reason` で台帳 `.vault-meta/entity-merges.json` に記して以後の候補から外す。
 
 ## 13. concept の親子化
 
