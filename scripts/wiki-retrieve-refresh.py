@@ -68,7 +68,8 @@ def run_logged(cmd):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Refresh contextual chunks and BM25.")
     parser.add_argument("--pages", nargs="+", help="Vault-relative page paths")
-    parser.add_argument("--all", action="store_true", help="Rechunk every wiki page")
+    parser.add_argument("--all", action="store_true",
+                        help="Rechunk knowledge wiki pages (asks/briefs は除外)")
     parser.add_argument("--no-llm", action="store_true", default=True,
                         help="Synthetic prefixes (default). Kept for CLI compatibility.")
     parser.add_argument("--allow-egress", action="store_true",
@@ -103,7 +104,7 @@ def main(argv=None):
     failed = False
 
     if args.all:
-        log("wiki-retrieve-refresh: --all walks every wiki/*.md; prefer --pages on ingest")
+        log("wiki-retrieve-refresh: --all walks knowledge wiki/*.md (asks/briefs は除外); prefer --pages on ingest")
         cmd = [sys.executable, str(prefix_py), "--all", *prefix_flags]
         log(f"wiki-retrieve-refresh: {' '.join(cmd)}")
         proc = run_logged(cmd)

@@ -261,10 +261,19 @@ def check_content(rel, text):
 
 
 def has_address(text):
+    return frontmatter_address(text) is not None
+
+
+def frontmatter_address(text):
+    """frontmatter の `address:` が `c-NNNNNN` ならその値。無ければ None。"""
     parts = split_frontmatter(text)
     if parts is None:
-        return False
-    return "address" in frontmatter_keys(parts[0])
+        return None
+    raw = frontmatter_keys(parts[0]).get("address")
+    if raw is None or isinstance(raw, list):
+        return None
+    value = unquote(raw)
+    return value if ADDRESS_RE.match(value) else None
 
 
 def insert_address(text, address):
@@ -406,13 +415,25 @@ def write_one(spec, opts):
                     "error": "既存ファイルがある(上書きするなら --force)",
                     "warnings": warnings}, EXIT_DATA
         action = "overwritten" if exists else "created"
+        if exists and has_fm and frontmatter_address(text) is None and address is None:
+            try:
+                old_text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                return {"path": rel, "error": "既存ファイルを読めない: %s" % exc,
+                        "warnings": warnings}, EXIT_DATA
+            reused = frontmatter_address(old_text)
+            if reused:
+                text = insert_address(text, reused)
+                allocate = False
+                address = reused
+                warnings.append("既存ページの address を再利用した")
         if has_fm and allocate:
             allocated, err = allocate_address()
             if allocated is None:
                 warnings.append("address を採番しなかった: %s" % err)
             else:
                 address = allocated
-        if address is not None:
+        if address is not None and frontmatter_address(text) is None:
             text = insert_address(text, address)
         try:
             atomic_write(path, text)

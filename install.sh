@@ -33,6 +33,8 @@ mkdir -p "$VAULT/wiki/meta" \
   "$VAULT/wiki/entities" \
   "$VAULT/wiki/concepts" \
   "$VAULT/wiki/questions" \
+  "$VAULT/wiki/asks" \
+  "$VAULT/wiki/briefs" \
   "$VAULT/wiki/surveys" \
   "$VAULT/.raw/papers" \
   "$VAULT/.raw/books" \

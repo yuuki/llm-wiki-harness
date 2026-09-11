@@ -382,9 +382,9 @@ esac
 ### Scope (what the helper scans)
 
 - Includes: every `.md` under `wiki/` **except** the exclusion set below. The scope is "candidate tileable pages," not just `type: concept`.
-- Excludes (path): anything under `wiki/folds/` or `wiki/meta/`.
+- Excludes (path): anything under `wiki/folds/`, `wiki/meta/`, `wiki/asks/`, or `wiki/briefs/`.
 - Excludes (filename): `_index.md`, `index.md`, `log.md`, `hot.md`, `overview.md`, `dashboard.md`, `Wiki Map.md`, `getting-started.md`.
-- Excludes (frontmatter): `type: meta` or `type: fold`.
+- Excludes (frontmatter): `type: meta`, `type: fold`, `type: ask`, or `type: brief`.
 - Excludes (security): symlinks. Any page file that is a symlink, or whose resolved path escapes the vault root, is skipped.
 
 If you place a real concept under `wiki/meta/` it will be excluded by path regardless of content. Keep concepts in their canonical folders.

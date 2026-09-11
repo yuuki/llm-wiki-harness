@@ -46,7 +46,9 @@ from pathlib import Path
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 META = VAULT_ROOT / ".vault-meta"
-WIKI_DIRS = ("sources", "entities", "concepts", "questions", "surveys")
+KNOWLEDGE_DIRS = ("sources", "entities", "concepts", "questions", "surveys")
+COMPANION_DIRS = ("asks", "briefs")
+WIKI_DIRS = KNOWLEDGE_DIRS
 ADDRESS_RE = re.compile(r"^address:\s*\"?(c-\d{6})\"?\s*$", re.M)
 HOT_MAX_ENTRIES, HOT_MAX_TOKENS = 5, 2000
 LOCK_STALE_SEC = 3600
@@ -54,14 +56,24 @@ TRACKED_LEDGERS = ("recompile-queue.json", "claim-audit.json", "concept-candidat
 OPTIONAL_LEDGERS = ("entity-merges.json", "mode.json", "transport.json")
 
 
-def wiki_pages():
-    for sub in WIKI_DIRS:
+def iter_wiki_md(*subs):
+    for sub in subs:
         d = VAULT_ROOT / "wiki" / sub
         if not d.is_dir():
             continue
         for p in d.glob("*.md"):
             if not p.name.startswith("_"):
                 yield p
+
+
+def wiki_pages():
+    """知識ページ。freshness / unchunked はここだけを見る(asks/briefs は索引しない)。"""
+    yield from iter_wiki_md(*KNOWLEDGE_DIRS)
+
+
+def address_pages():
+    """address 重複検査は派生ノートも含める。"""
+    yield from iter_wiki_md(*KNOWLEDGE_DIRS, *COMPANION_DIRS)
 
 
 def rel(p):
@@ -230,7 +242,7 @@ def pid_alive(pid):
 def check_address_counter(r, ctx):
     counter_file = META / "address-counter.txt"
     addrs = Counter()
-    for p in ctx["pages"]:
+    for p in ctx.get("address_pages") or ctx["pages"]:
         try:
             head = p.read_text(encoding="utf-8")[:1500]
         except (OSError, UnicodeDecodeError):
@@ -429,7 +441,7 @@ def main(argv=None):
     if unknown:
         print(f"ERR: unknown check: {', '.join(sorted(unknown))}", file=sys.stderr)
         return 2
-    ctx = {"pages": list(wiki_pages())}
+    ctx = {"pages": list(wiki_pages()), "address_pages": list(address_pages())}
     report = Report()
     for name, fn in CHECKS:
         if wanted and name not in wanted:

@@ -101,6 +101,7 @@ SKIP_DIR_NAMES = frozenset({"node_modules"})
 KNOWN_TYPES = frozenset({
     "source", "entity", "concept", "question", "comparison",
     "meta", "survey", "fold", "overview", "thesis",
+    "ask", "brief",
 })
 CATALOG_RELS = ("wiki/index.md", "wiki/hot.md", "wiki/log.md")
 
@@ -111,7 +112,7 @@ DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$")
 ADDRESS_LINE_RE = re.compile(r"^address:\s*(\S+)\s*$", re.M)
 
 # frontmatter のうちリンクを検査するキー(L4: `title` などは対象外)。
-LINKED_FM_KEYS = frozenset({"related", "sources"})
+LINKED_FM_KEYS = frozenset({"related", "sources", "asks", "brief"})
 FM_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$")
 FM_ITEM_RE = re.compile(r"^\s*-\s+")
 
@@ -420,12 +421,33 @@ def path_candidates(target, page_rel):
     return out
 
 
+def is_self_ref(target, page_rel, self_names):
+    """パス修飾リンクは実ファイルが当ページのときだけ自己参照。
+
+    `brief:` / `asks:` は source と同じ basename を持つが別ファイルなので、
+    stem 一致だけでは自己参照にしない。
+    """
+    if "/" in target:
+        page_path = (VAULT_ROOT / page_rel).resolve()
+        for cand in path_candidates(target, page_rel):
+            p = VAULT_ROOT / cand
+            if p.exists() and p.resolve() == page_path:
+                return True
+        return False
+    return nfc(link_stem(target)).casefold() in self_names
+
+
 def resolve_link(target, page_rel, index):
-    """通常の wikilink が vault 内のどれかに解決するか。"""
+    """通常の wikilink が vault 内のどれかに解決するか。
+
+    パス修飾(`wiki/briefs/@...` など `/` を含む)は実パスだけを見る。
+    stem へ落とすと、source と同じ basename の派生ノート死リンクが
+    source 自身に誤解決する(conventions §14・§15)。
+    """
     if not target or URL_RE.match(target):
         return True
-    if "/" in target and path_exists(path_candidates(target, page_rel)):
-        return True
+    if "/" in target:
+        return path_exists(path_candidates(target, page_rel))
     md_by_stem, asset_by_name = index
     return (link_stem(target).casefold() in md_by_stem
             or PurePosixPath(target).name.casefold() in asset_by_name)
@@ -729,7 +751,7 @@ def check_links(rel, fm_lines, body_lines, first_lineno,
                 report.counters["unresolved_links"] += 1
                 check = "NAV-LINK" if is_nav else "LINK"
                 report.error(check, "リンクが解決しない: [[%s]]" % inner, rel, lineno)
-            elif nfc(link_stem(target)).casefold() in self_names:
+            elif is_self_ref(target, rel, self_names):
                 report.warn("SELF-REF", "自分自身を [[%s]] で参照している" % inner,
                             rel, lineno)
         for src in MD_IMAGE_RE.findall(line):
@@ -746,8 +768,9 @@ def check_links(rel, fm_lines, body_lines, first_lineno,
 def frontmatter_link_lines(fm_lines):
     """frontmatter のうちリンクを検査する行だけを (行番号, 行) で返す。
 
-    対象は `related` と `sources` に限る。`title` などの本文的な値に
-    `[[...]]` を含む書き方があり、それを未解決 error にすると偽陽性になる。
+    対象は `LINKED_FM_KEYS`(`related` / `sources` / `asks` / `brief`)。
+    `title` などの本文的な値に `[[...]]` を含む書き方があり、それを
+    未解決 error にすると偽陽性になる。
     """
     out = []
     key = None

@@ -186,6 +186,38 @@ class VerifyCase(unittest.TestCase):
         proc = self.run_verify("--pages", "wiki/sources/a.md")
         self.assertHas(proc, "ERROR", "FM-TYPE")
 
+    def test_ask_and_brief_types_are_known(self):
+        (self.vault / "wiki/asks").mkdir(parents=True, exist_ok=True)
+        (self.vault / "wiki/briefs").mkdir(parents=True, exist_ok=True)
+        self.write("wiki/asks/@2026__X__Y.md",
+                   page(type="ask", title='"Q&A"', h1="Q&A", address="c-000010",
+                        tags=("2026/09/04", "ask"),
+                        drop=("source_type", "publish")))
+        self.write("wiki/briefs/@2026__X__Y.md",
+                   page(type="brief", title='"紹介"', h1="紹介", address="c-000011",
+                        tags=("2026/09/04", "brief"),
+                        drop=("source_type", "publish")))
+        for rel in ("wiki/asks/@2026__X__Y.md", "wiki/briefs/@2026__X__Y.md"):
+            proc = self.run_verify("--pages", rel)
+            self.assertLacks(proc, "FM-TYPE")
+            self.assertEqual(proc.returncode, 0, proc.stdout)
+
+    def test_brief_frontmatter_link_is_checked(self):
+        """本番形: source と同 stem のパス修飾。stem フォールバックでは死なない。"""
+        self.write("wiki/sources/@2026__X__Y.md",
+                   page(title='"Y"', h1="Y",
+                        brief='"[[wiki/briefs/@2026__X__Y|紹介文]]"'))
+        proc = self.run_verify("--pages", "wiki/sources/@2026__X__Y.md")
+        self.assertHas(proc, "ERROR", "LINK")
+        (self.vault / "wiki/briefs").mkdir(parents=True, exist_ok=True)
+        self.write("wiki/briefs/@2026__X__Y.md",
+                   page(type="brief", title='"紹介"', h1="紹介",
+                        address="c-000011", tags=("2026/09/04", "brief"),
+                        drop=("source_type", "publish")))
+        ok = self.run_verify("--pages", "wiki/sources/@2026__X__Y.md")
+        self.assertLacks(ok, "LINK")
+        self.assertLacks(ok, "SELF-REF")
+
     def test_missing_core_keys(self):
         self.write("wiki/sources/a.md",
                    page(drop=("title", "date", "created", "updated", "status")))
@@ -348,7 +380,7 @@ class VerifyCase(unittest.TestCase):
         self.assertEqual(self.summary(proc)["unresolved_embeds"], "0")
 
     def test_title_wikilink_is_not_link_checked(self):
-        """frontmatter で解決を見るのは related / sources だけ。"""
+        """frontmatter で解決を見るのは related / sources / asks / brief。title は見ない。"""
         self.write("wiki/sources/a.md", page(title='"[[居ないページ]] の話"'))
         proc = self.run_verify("--pages", "wiki/sources/a.md")
         self.assertLacks(proc, "LINK")

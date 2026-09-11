@@ -166,6 +166,8 @@ def build():
             base = link_basename(t)
             if base:
                 targets.add(base)
+        # asks: / brief: は見ない。companion は SCAN_DIRS 外で、source と同じ
+        # basename を持つため、stem 解決すると source 自己辺になる。
         for key in ("related", "sources"):
             for t in fm_list_links(fm_text, key):
                 base = link_basename(t)

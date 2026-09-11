@@ -50,7 +50,7 @@ without DragonScale Mechanism 2 enabled.
 
 Usage:
   contextual-prefix.py PATH               # process a single page
-  contextual-prefix.py --all              # process every wiki/*.md
+  contextual-prefix.py --all              # process knowledge wiki/*.md (asks/briefs は除外)
   contextual-prefix.py PATH --no-llm      # force synthetic-prefix tier 3
   contextual-prefix.py PATH --rebuild     # ignore existing chunks
   contextual-prefix.py PATH --peek        # print what would happen; write nothing
@@ -78,6 +78,8 @@ from pathlib import Path
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 WIKI_DIR = VAULT_ROOT / "wiki"
 META_DIR = VAULT_ROOT / ".vault-meta"
+# source から派生した配布・Q&A ノート。知識の一次ソースではないので BM25 に入れない。
+COMPANION_DIRS = frozenset({"asks", "briefs"})
 CHUNKS_DIR = META_DIR / "chunks"
 
 CHUNK_TARGET_TOKENS = 500  # rough; we approximate via chars/4
@@ -425,10 +427,22 @@ def process_page(page_path, force_synthetic=False, rebuild=False, peek=False,
     return {"address": address, "written": written, "skipped": skipped, "tier": tier}
 
 
+def is_companion_page(path):
+    """`wiki/asks/` と `wiki/briefs/` は retrieve の対象外(conventions §14・§15)。"""
+    try:
+        rel = Path(path).resolve().relative_to(WIKI_DIR.resolve())
+    except ValueError:
+        return False
+    return bool(rel.parts) and rel.parts[0] in COMPANION_DIRS
+
+
 def collect_pages(target):
     if target == "--all" or target is None:
-        return sorted(p for p in WIKI_DIR.rglob("*.md")
-                      if not any(part.startswith(".") for part in p.parts))
+        return sorted(
+            p for p in WIKI_DIR.rglob("*.md")
+            if not any(part.startswith(".") for part in p.parts)
+            and not is_companion_page(p)
+        )
     p = Path(target)
     if not p.is_absolute():
         p = VAULT_ROOT / p
@@ -439,9 +453,9 @@ def main():
     parser = argparse.ArgumentParser(description="Chunk + contextualize wiki pages.")
     parser.add_argument("path", nargs="?",
                         help="Page path relative to vault root. Omit (or pass --all) "
-                             "to process every wiki page.")
+                             "to process knowledge wiki pages (asks/briefs は除外).")
     parser.add_argument("--all", action="store_true",
-                        help="Process every wiki page (equivalent to omitting path).")
+                        help="Process knowledge wiki pages (equivalent to omitting path).")
     parser.add_argument("--no-llm", action="store_true",
                         help="Force tier-3 synthetic prefix (skip LLM calls).")
     parser.add_argument("--allow-egress", action="store_true",
@@ -482,6 +496,11 @@ def main():
     skipped_non_files = len(pages) - len(files)
     if skipped_non_files:
         log(f"({skipped_non_files} non-file paths skipped)")
+    companions = [p for p in files if is_companion_page(p)]
+    if companions:
+        log("(%d companion pages skipped: wiki/asks|briefs are not retrieve sources)"
+            % len(companions))
+        files = [p for p in files if not is_companion_page(p)]
     total = len(files)
     total_written = 0
     total_skipped = 0

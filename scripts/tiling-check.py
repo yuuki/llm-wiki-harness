@@ -60,12 +60,12 @@ CACHE_PATH = META_DIR / "tiling-cache.json"
 CACHE_LOCK = META_DIR / ".tiling.lock"
 THRESHOLDS_PATH = META_DIR / "tiling-thresholds.json"
 
-EXCLUDE_TYPES = {"meta", "fold"}
+EXCLUDE_TYPES = {"meta", "fold", "ask", "brief"}
 EXCLUDE_FILENAMES = {
     "_index.md", "index.md", "log.md", "hot.md", "overview.md",
     "dashboard.md", "Wiki Map.md", "getting-started.md",
 }
-EXCLUDE_PATH_PREFIXES = ("wiki/folds/", "wiki/meta/")
+EXCLUDE_PATH_PREFIXES = ("wiki/folds/", "wiki/meta/", "wiki/asks/", "wiki/briefs/")
 MAX_BODY_BYTES = 128 * 1024
 SCALE_WARN_PAGES = 500
 SCALE_HARD_FAIL_PAGES = 5000

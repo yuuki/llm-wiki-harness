@@ -288,6 +288,22 @@ class PageWriteTest(VaultCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertEqual("overwritten", json_lines(proc.stdout)[0]["action"])
 
+    def test_force_overwrite_reuses_existing_address(self):
+        self.install_allocator()
+        old = SOURCE_PAGE.replace("---\n", "---\naddress: c-000042\n", 1)
+        self.write_page("wiki/sources/@2026__T__Reuse.md", old)
+        proc = run(PAGE_WRITE, ["wiki/sources/@2026__T__Reuse.md", "--force",
+                                "--content-file", self.content_file(SOURCE_PAGE)],
+                   self.vault)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        result = json_lines(proc.stdout)[0]
+        self.assertEqual("overwritten", result["action"])
+        self.assertEqual("c-000042", result["address"])
+        text = self.read_page("wiki/sources/@2026__T__Reuse.md")
+        self.assertEqual(1, text.count("address:"))
+        self.assertIn("address: c-000042", text)
+        self.assertNotIn("address: c-000001", text)
+
     def test_explicit_address_wins_over_allocation(self):
         self.install_allocator()
         proc = run(PAGE_WRITE, ["wiki/entities/E.md", "--address", "c-009999",

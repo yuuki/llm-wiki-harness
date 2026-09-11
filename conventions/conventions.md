@@ -3,7 +3,7 @@ type: meta
 title: "Wiki Conventions"
 created: 2026-06-02
 date: 2026-06-02 18:46
-updated: 2026-09-06
+updated: 2026-09-11
 tags:
   - 2026/06/02
   - meta
@@ -14,6 +14,7 @@ tags:
   - 2026/08/30
   - 2026/09/02
   - 2026/09/06
+  - 2026/09/11
 status: evergreen
 related:
   - "[[index]]"
@@ -25,7 +26,7 @@ related:
 
 Navigation: [[index]] | [[overview]]
 
-> [!important] wiki-ingest / wiki-query / wiki-lint / save / autoresearch を実行する前に必ずこのファイルを読むこと。
+> [!important] wiki-ingest / wiki-query / wiki-lint / wiki-ask-source / wiki-brief-source / save / autoresearch を実行する前に必ずこのファイルを読むこと。
 > カタログ・ホット・ログの全文は読まない。発見・節抽出・追記は [[token-discipline]](`wiki/meta/token-discipline.md`)に従う。
 > claude-obsidian 標準のページ形式は、この vault の既存規約(`papers/`・`research/`・`structures/` で確立済み)に合わせて以下のとおり**上書き**する。標準と矛盾する箇所は**このファイルが優先**する。
 
@@ -45,7 +46,7 @@ Navigation: [[index]] | [[overview]]
 
 ```yaml
 ---
-type: source            # source|entity|concept|question|thesis|comparison|survey|meta
+type: source            # source|entity|concept|question|thesis|comparison|survey|ask|brief|meta
 title: "人間可読タイトル"
 date: 2026-06-02 18:46   # 既存規約(必須): 作成日時 YYYY-MM-DD HH:mm
 created: 2026-06-02      # wiki 標準: YYYY-MM-DD
@@ -79,6 +80,8 @@ arxiv_id: "2405.16444"  # paper: arXiv の版番号なし ID。url / .raw slug /
 doi: "10.1145/3689031.3696098"  # paper: 小文字 DOI(doi.org/ は付けない)。arXiv しか無い論文には付けない
 confidence: high        # high|medium|low
 key_claims: []
+asks: ""                # 任意: 対応する wiki/asks/ ページへのパス修飾リンク(§14)。軽い質問が溜まったら作る
+brief: ""               # 任意: 対応する wiki/briefs/ ページへのパス修飾リンク(§15)。配布用紹介文を作ったら付ける
 
 # entity
 entity_type: person     # person|organization|product|repository|place|dataset|book|thesis|survey
@@ -109,6 +112,8 @@ thesis ページの判定は「命題が真か」ではなく「wiki のソー�
 | source | `wiki/sources/` | **`@YYYY__SOURCE__Title.md`**(先頭に必ず `@`。`route` の slug 出力でなくこちらを優先) | `@2026__MLSys2026__Amin Vahdat Keynote - The Architecture of Intelligence.md` |
 | entity | `wiki/entities/` | 原名(大文字・スペース保持。`route entity` の出力どおり) | `Amin Vahdat.md` |
 | concept | `wiki/concepts/` | 原名(`structures/` の MOC 名と揃える) | `異常検知.md` |
+| ask | `wiki/asks/` | 対応する source と**同じ basename(`@` 込み)**(§14) | `wiki/asks/@2026__X__Y.md` |
+| brief | `wiki/briefs/` | 対応する source と**同じ basename(`@` 込み)**(§15) | `wiki/briefs/@2026__X__Y.md` |
 
 - ファイル名のセパレータは既存どおりアンダースコア 2 つ `__`、スペースは保持、禁則文字(`/` `:` 等)は空白で囲む。
 - 章分割する長編文書の章 source は `@YYYY__SOURCE__Title - Chapter N 題.md`(書籍は §9、博士論文・長編サーベイは §10。博士論文の `SOURCE` は `PhD`、修士は `MSc`)。
@@ -250,3 +255,29 @@ concept ページは、複数ソースを横断した知識を compile した**�
 - 親の主題節には、子を 2 つ以上並べて初めて見える観察だけを残す。
 - ingest でハブに当たったら excerpt で定義・子概念・主題節の outline・受信箱末尾だけを読み、更新先は最も近い子を優先する。
 - 候補の列挙は `python3 scripts/wiki-concept-stats.py`。related 先がそれ自体ハブ規模(走査閾値以上)ならピアであり、子にしない。相互参照は問わない(手法の子も親へ戻す related を持つ)。薄い related 先だけを子候補とする。既存ハブの本文分割は `wiki-refactor` の対象であり、ingest の途中で親を解体しない。
+
+## 14. 軽量質問(ask)ページ
+
+すでに ingest 済みの単一 source について、対話の中で出た軽い確認・深掘り質問(例: 「この手法を使う意味は?」「A と B の関係は?」)を溜める場所。`wiki-query` の標準/deep モードが作る `wiki/questions/`(複数 source 横断・引用重厚な長編 1 問 1 答)より軽く、**1 論文 1 ノートに複数の質問を日付ごとに積み増す**運用にする。
+
+1. **配置とファイル名**: `wiki/asks/` 配下に、対応する source ページと**同じ basename(`@` 込み)**を付ける(例: `wiki/sources/@2026__X__Y.md` に対して `wiki/asks/@2026__X__Y.md`)。folder が違うだけで basename が一致するため、§4・§9 と同じ理由でベアリンク `[[@2026__X__Y]]` は誤解決しうる。**ask ページと source ページを相互参照するときは、必ず `[[wiki/asks/@...|ラベル]]` / `[[wiki/sources/@...|ラベル]]` とパス修飾する**(§9 ルール 7 の回避パターンを踏襲)。
+2. **frontmatter**: `type: ask`。標準スキーマ(`title`/`date`/`created`/`updated`/`tags`/`status`/`related`)に加え、`sources:` に対応する source ページへのパス修飾リンクを 1 件だけ持つ。`status` は `developing` のまま育ち続けてよい(質問が溜まる限り evergreen 化しない)。
+3. **source 側からの一方向でない相互リンク**: 対応する source ページの frontmatter に `asks: "[[wiki/asks/@...|Q&A]]"` を追加する(§3)。ask ページが無いうちはこのフィールド自体を省略してよく、最初の質問が出た時点で source 側にも追記する。
+4. **本文構成**: `## YYYY-MM-DD` を日付ごとの節にし、その下に `**Q. 質問文**` と回答段落を積む。過去の日付節は編集せず、新しい日付が来たら末尾に追加する(`wiki/log.md` の追記原則と同じ発想)。末尾に `## 出典` で source ページへのパス修飾リンクを 1 件置く。
+5. **出典の厳格性は緩める**: 回答は同じ source の理解を言い換えたものが大半なので、§5 の「source 自身に由来する本文には冗長な出典引用を付けない」規則をそのまま適用してよい。ただし他 source や wiki の concept に踏み込んだ答えは通常どおり `[[...]]` で出典を示す。
+6. **昇格条件**: 質問が (a) 複数 source を横断する、(b) 「〜は本当か」を判定したい命題になる、(c) 単独で引用付きの深掘り解説に値する、のいずれかに育ったら、ask ページに留めずそれぞれ `wiki-ingest`/`autoresearch`・`wiki-thesis`・`wiki-query` へ昇格させ、ask ページの当該質問に一行「→ 昇格: [[...]]」を残す。
+7. **address**: 他の wiki ページと同様に `scripts/wiki-page-write.py` で採番・検証・ロックを 1 呼び出しに束ねて作成する。
+
+## 15. 配布用紹介文(brief)ページ
+
+すでに ingest 済みの単一 source について、Slack 等へ貼る配布用の紹介文を残す場所。`wiki/sources/` の source ページは ingest 時点の要約であり、紹介文ノートはそれを再要約したものではない。読み手向けに圧縮した紹介文を、source とは別ノートに 1 本だけ持つ。手順は `wiki-brief-source` skill。type / フォルダの識別子は `brief` / `briefs`。和文では「紹介文」「紹介文ノート」と書き、「ブリーフ」は使わない。
+
+`wiki/asks/`(§14)と同じ**派生ノート**である。知識の一次ソースではない。
+
+1. **配置とファイル名**: `wiki/briefs/` 配下に、対応する source ページと**同じ basename(`@` 込み)**を付ける(例: `wiki/sources/@2026__X__Y.md` に対して `wiki/briefs/@2026__X__Y.md`)。folder が違うだけで basename が一致するため、§4・§9 と同じ理由でベアリンク `[[@2026__X__Y]]` は誤解決しうる。**紹介文ノートと source ページを相互参照するときは、必ず `[[wiki/briefs/@...|ラベル]]` / `[[wiki/sources/@...|ラベル]]` とパス修飾する**。
+2. **frontmatter**: `type: brief`。標準スキーマ(`title`/`date`/`created`/`updated`/`tags`/`status`/`related`)に加え、`sources:` に対応する source ページへのパス修飾リンクを 1 件だけ持つ。`title` は `紹介: <source の title>`。新規は `status: seed`。
+3. **source 側からの相互リンク**: 対応する source ページの frontmatter に `brief: "[[wiki/briefs/@...|紹介文]]"` を追加する(§3)。紹介文ノートが無いうちはこのフィールド自体を省略してよい。
+4. **本文構成**: `## 紹介文` に Slack へ貼る本文(箇条書き + 書誌 1 行)を置く。末尾に `## 出典` で source ページへのパス修飾リンクを 1 件置く。日付ごとの積み増しはしない。作り直すときは `## 紹介文` だけを差し替え、`address` / `created` / 他節は残す。
+5. **出典の厳格性は緩める**: 紹介文は同じ source の言い換えなので、§5 の「source 自身に由来する本文には冗長な出典引用を付けない」規則を適用する。URL は source の `url` または本文リンクから取り、無ければ書誌行から落とす。
+6. **知識の一次ソースにしない**: `wiki/log.md` と `wiki/hot.md` には記帳しない。`scripts/contextual-prefix.py --all` と `wiki-retrieve-refresh.py --all` は `wiki/asks/` と `wiki/briefs/` を走査しない。tiling / boundary-score も `type: ask|brief` と両フォルダを除外する。知識グラフ(`wiki-graph.py`)にも載せない(source と同じ basename のため、stem 解決すると自己辺になる)。address 重複検査(`wiki-doctor.py`)だけは派生ノートも含める。解説や判定が必要なら `wiki-ask-source` / `wiki-query` / `wiki-thesis` へ進む。
+7. **address**: `scripts/wiki-page-write.py` で採番・検証・ロックを 1 呼び出しに束ねて作成する。上書き時は `--force` を使い、本文に `address` が無くても既存ファイルの address を再利用する。再採番しない。

@@ -54,7 +54,8 @@ class DoctorTest(unittest.TestCase):
             root = Path(td).resolve()
             make_vault(root)
             doc = import_script("wiki-doctor", root)
-            ctx = {"pages": list(doc.wiki_pages())}
+            ctx = {"pages": list(doc.wiki_pages()),
+                   "address_pages": list(doc.address_pages())}
             rep = doc.Report()
             for name, fn in doc.CHECKS:
                 if name in ("ollama", "git_dirty_wiki"):
@@ -92,12 +93,59 @@ class DoctorTest(unittest.TestCase):
             rc = doc.main(["--json", "--only", "address_counter,ledgers,locks,tmp_residue,auto_commit_disabled"])
             self.assertEqual(rc, 0)
 
+    def test_address_scan_includes_companion_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            make_vault(root)
+            (root / "wiki/concepts/Beta.md").write_text(
+                "---\ntitle: Beta\ntype: concept\naddress: c-000002\n---\n# Beta\n",
+                encoding="utf-8")
+            (root / "wiki/briefs").mkdir(parents=True, exist_ok=True)
+            (root / "wiki/briefs/@2026__X__Alpha.md").write_text(
+                "---\ntitle: 紹介\ntype: brief\naddress: c-000001\n---\n# 紹介\n",
+                encoding="utf-8")
+            doc = import_script("wiki-doctor", root)
+            ctx = {"pages": list(doc.wiki_pages()),
+                   "address_pages": list(doc.address_pages())}
+            self.assertFalse(any(p.name == "@2026__X__Alpha.md" and "briefs" in p.parts
+                                 for p in ctx["pages"]))
+            self.assertTrue(any("briefs" in p.parts for p in ctx["address_pages"]))
+            rep = doc.Report()
+            doc.check_address_counter(rep, ctx)
+            by = {r["check"]: r for r in rep.rows}
+            self.assertEqual(by["address_counter"]["status"], "FAIL")
+            self.assertIn("重複", by["address_counter"]["detail"])
+
     def test_unknown_check_is_usage_error(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
             make_vault(root)
             doc = import_script("wiki-doctor", root)
             self.assertEqual(doc.main(["--only", "nope"]), 2)
+
+
+class CompanionIndexTest(unittest.TestCase):
+    def test_collect_pages_skips_asks_and_briefs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            for sub in ("wiki/sources", "wiki/asks", "wiki/briefs"):
+                (root / sub).mkdir(parents=True, exist_ok=True)
+            (root / "wiki/sources/@2026__X__A.md").write_text("# A\n", encoding="utf-8")
+            (root / "wiki/asks/@2026__X__A.md").write_text("# ask\n", encoding="utf-8")
+            (root / "wiki/briefs/@2026__X__A.md").write_text("# brief\n", encoding="utf-8")
+            prefix = import_script("contextual-prefix", root)
+            got = {p.relative_to(root).as_posix() for p in prefix.collect_pages("--all")}
+            self.assertEqual(got, {"wiki/sources/@2026__X__A.md"})
+            self.assertTrue(prefix.is_companion_page(root / "wiki/briefs/@2026__X__A.md"))
+            self.assertFalse(prefix.is_companion_page(root / "wiki/sources/@2026__X__A.md"))
+
+    def test_tiling_exclude_lists_include_companions(self):
+        for name in ("tiling-check.py", "boundary-score.py"):
+            text = (SCRIPTS / name).read_text(encoding="utf-8")
+            self.assertIn('"brief"', text)
+            self.assertIn('"ask"', text)
+            self.assertIn("wiki/briefs/", text)
+            self.assertIn("wiki/asks/", text)
 
 
 class ContextPackTest(unittest.TestCase):

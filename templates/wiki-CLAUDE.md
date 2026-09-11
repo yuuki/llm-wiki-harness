@@ -6,7 +6,7 @@
 
 - `.raw/` — 新規ソースの不変原本。ingest は読み取りのみ
 - `wiki/` — LLM が生成する横断知識
-  - `sources/` / `entities/` / `concepts/` / `questions/` / `surveys/` / `meta/`
+  - `sources/` / `entities/` / `concepts/` / `questions/` / `asks/` / `briefs/` / `surveys/` / `meta/`
   - `index.md` カタログ / `hot.md` 直近窓 / `log.md` 操作履歴 / `overview.md`
 - `.vault-meta/` — `mode.json` / `transport.json` / lock / address カウンタ
 - `scripts/` — カタログ・解決・抜粋・retrieve・原本取得に加え、矛盾索引・再編纂キュー・命題再検証・ページグラフ・concept 候補台帳・論文 ID・entity 名寄せ・関心要約・コンテキスト束・機械状態検査
@@ -34,6 +34,8 @@
 | 動画 | `wiki-ingest-video` | 文字起こしを補助に wiki 化 |
 | 記事など一般ソース | `wiki-ingest` | `.raw/articles/` + wiki |
 | 単発の問い・1 ソースの解説・2 対象の差分 | `wiki-query` | 回答 + 標準では `wiki/questions/`（save-first） |
+| 既読 1 source への軽い確認・深掘り | `wiki-ask-source` | `wiki/asks/`（1 source = 1 ノート。conventions §14） |
+| 既読 1 source の配布用紹介文（Slack 等） | `wiki-brief-source` | `wiki/briefs/`（1 source = 1 ノート。conventions §15）。旧名 `summarize-paper-note` |
 | 1 つの命題の判定（「〜は本当か」） | `wiki-thesis` | `wiki/questions/`（`type: thesis`） |
 | 設計空間・文献地図・対象の像 | `wiki-survey` | `wiki/surveys/` |
 | ギャップ・閉じなかった命題からの着想 | `wiki-ideate` | 承認後 `research/ideas/`（無いレイヤーなら `/tmp`） |
@@ -42,7 +44,7 @@
 | 構造的間隙の判定 | `wiki-gap` | `wiki/meta/gap-report-*.md` |
 | 概念の再編纂 | `wiki-refactor` | 対象の concept ページ |
 
-母集団が薄いときの `wiki-survey` は `wiki-ingest-*` または上流の `autoresearch` へ差し戻す。命題に触れる source が 2 本未満の `wiki-thesis` も同じ差し戻し（`insufficient`）。どちらも `wiki-query` へは戻さない。
+母集団が薄いときの `wiki-survey` は `wiki-ingest-*` または上流の `autoresearch` へ差し戻す。命題に触れる source が 2 本未満の `wiki-thesis` も同じ差し戻し（`insufficient`）。どちらも `wiki-query` へは戻さない。既読 1 source の軽い確認は `wiki-ask-source`、Slack 等へ貼る紹介文は `wiki-brief-source`。どちらも知識の一次ソースではない。
 
 ## 概念ページ
 

@@ -9,7 +9,7 @@
 入れる:
 
 - 媒体別 ingest（論文・書籍・博士論文・スライド・動画）と、vault 側で分岐した `wiki-ingest` / `wiki-query` / `wiki-lint`
-- `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate`
+- `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate` / `wiki-ask-source` / `wiki-brief-source`
 - 日本語整文（`japanese-tech-writing` と `conventions/japanese-style.md`）
 - トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `concept-candidates.py` / `paper-ids.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py`）
 - 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
@@ -63,6 +63,8 @@ wiki/sources ──► wiki/entities
          wiki-query / wiki-thesis / wiki-survey
               │
               ├── wiki/questions（`type: question` / `type: thesis`）
+              ├── wiki/asks（既読 1 source の軽い Q&A。知識索引には入れない）
+              ├── wiki/briefs（配布用紹介文。知識索引には入れない）
               ├── wiki/surveys
               ├── wiki-ideate → research/ideas/（無いレイヤーなら承認後も /tmp）
               └── wiki-publish → notes/（任意）
@@ -85,6 +87,8 @@ wiki/sources ──► wiki/entities
 | 設問 | skill |
 |---|---|
 | 単発・1 ソース・2 対象の差分 | `wiki-query` |
+| 既読 1 source の軽い確認・深掘り | `wiki-ask-source`（`wiki/asks/`） |
+| 既読 1 source の配布用紹介文 | `wiki-brief-source`（`wiki/briefs/`。旧名 `summarize-paper-note`） |
 | 1 つの命題の判定（支持 / 反対 / 機序） | `wiki-thesis`（`wiki/questions/`、`type: thesis`） |
 | 設計空間・文献地図・対象の像 | `wiki-survey` |
 | ギャップや閉じなかった命題からの着想 1 本 | `wiki-ideate`（承認後 `research/ideas/`。無いレイヤーなら `/tmp`） |

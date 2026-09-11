@@ -1,12 +1,14 @@
 ---
 name: wiki-query
-description: "Answer questions using the Obsidian wiki vault. Retrieve-first: never read index.md, _index.md, log.md, or full hot.md (except the trimmed hot window in quick mode). Synthesizes answers with citations. Files good answers back as wiki pages. Supports quick, standard, and deep modes. Triggers on: what do you know about, query:, what is, explain, summarize, find in wiki, search the wiki, based on the wiki, wiki query quick, wiki query deep."
+description: "Answer questions using the Obsidian wiki vault. Retrieve-first: never read index.md, _index.md, log.md, or full hot.md (except the trimmed hot window in quick mode). Synthesizes answers with citations. Files good answers back as wiki pages. Supports quick, standard, and deep modes. Triggers on: what do you know about, query:, what is, explain, find in wiki, search the wiki, based on the wiki, wiki query quick, wiki query deep. 単一 source を Slack 等へ貼る紹介文や、配布意図のある「この論文を要約して」は wiki-brief-source。wiki 横断の「何が分かっているか」だけを本 skill で扱う。"
 allowed-tools: Read Glob Grep Bash
 ---
 
 # wiki-query: Query the Wiki
 
 The wiki has already done the synthesis work. Read strategically, answer precisely, and file good answers back so the knowledge compounds.
+
+単一 source の配布用紹介文(Slack に貼る箇条書き、「この論文を要約して」で共有したいとき)は `wiki-brief-source` に渡し、本 skill では答えない。`wiki/questions/` にも保存しない。
 
 ---
 
@@ -82,7 +84,7 @@ Do not open individual wiki pages in quick mode.
 3. If retrieve exits 10, fall back to `python3 scripts/wiki-resolve.py "<term>" --type any` + `rg`, then excerpt hits.
 4. Follow wikilinks from excerpts to depth-2 for key entities (excerpt those too). No deeper.
 5. **Synthesize** the answer in chat. Cite sources with wikilinks: `(Source: [[Page Name]])`.
-6. **File by default** (save-first). A standard answer that synthesises two or more pages is saved to `wiki/questions/` without asking (see *Filing Answers Back*). Skip the save only when: the user said not to, the answer is a bare fact lookup, the answer is "not in the wiki" (go to Gap Handling), or one existing page already answers it verbatim (then link that page instead of duplicating). Say in one line where it was filed.
+6. **File by default** (save-first). A standard answer that synthesises two or more pages is saved to `wiki/questions/` without asking (see *Filing Answers Back*). Skip the save only when: the user said not to, the answer is a bare fact lookup, the answer is "not in the wiki" (go to Gap Handling), one existing page already answers it verbatim (then link that page instead of duplicating), **or the request is a single-source Slack/配布紹介文** (hand to `wiki-brief-source`; do not file here). Say in one line where it was filed.
 7. If the question reveals a **gap**: say "I don't have enough on X. Want to find a source?"
 
 ---
@@ -129,6 +131,8 @@ If the trimmed hot window has the answer (quick mode), respond without reading f
 ## Filing Answers Back
 
 Good answers compound into the wiki. Don't let insights disappear into chat history.
+
+単一 source の配布用紹介文はここへ保存しない。`wiki-brief-source` が `wiki/briefs/` に書く。
 
 When filing an answer:
 
