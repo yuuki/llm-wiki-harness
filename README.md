@@ -21,7 +21,7 @@
 - 既存ノート層向け skill（`create-paper-note` / `create-conference-note` / `create-tech-note`）
 - 上流 claude-obsidian の足場そのもの（`wiki` スキャフォールド、`wiki-fold`、`wiki-cli`、`wiki-mode`、`autoresearch`、`save`、`canvas`）
 
-上流は [claude-obsidian](https://github.com/agricidaniel/claude-obsidian) を vault に入れる。本リポジトリはその上に重ねる特化層である。分岐ファイルの由来は [`NOTICE.md`](NOTICE.md)。
+上流は [claude-obsidian](https://github.com/agricidaniel/claude-obsidian) を vault に入れる。本リポジトリはその上に重ねる特化層である。分岐ファイルの由来は [`NOTICE.md`](NOTICE.md)。利用者向けの差分は [`CHANGELOG.md`](CHANGELOG.md)。
 
 ## 前提
 
@@ -154,6 +154,10 @@ python3 scripts/test_wiki_doctor.py
 ```
 
 `wiki-lens` は `cd plugins/wiki-lens && npm test`。
+
+## 変更履歴
+
+利用者向けの差分は [`CHANGELOG.md`](CHANGELOG.md) の `[Unreleased]` に追記する。タグを切るときにバージョン節へ移す。
 
 ## ライセンス
 
