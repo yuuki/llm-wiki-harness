@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-11
+
+既読 source の軽い質問と配布用紹介文を、知識とは別の派生ノートとして残す。
+
 ### Added
 
 - `wiki-ask-source`。既読 1 source の軽い確認を `wiki/asks/` に 1 source = 1 ノートで積む（conventions §14、`type: ask`）。
