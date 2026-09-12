@@ -127,6 +127,8 @@ rg -c "<主要用語>" wiki/sources/ wiki/concepts/ | sort -t: -k2 -rn | head -4
 
 ### フェーズ 3　クラスタ別の並列精読
 
+フェーズ 3 の「クラスタ」は母集団の編集分割（精読クラスタ）である。`wiki-clusters.py` のテーマ塊とは別物である。本 skill はテーマ塊 CLI を呼ばない。
+
 母集団を主題別に 5 クラスタから 8 クラスタへ分ける。文献数で均等割りせず、主題の境界で切る。
 
 - 各クラスタに Explore subagent を 1 体割り当て、並列投入する。ブリーフは [`references/subagent-brief.md`](references/subagent-brief.md) の雛形を使う。

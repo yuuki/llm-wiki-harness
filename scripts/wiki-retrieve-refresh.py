@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wiki-retrieve-refresh.py — rechunk pages, rebuild the BM25 index, rebuild the link graph.
+"""wiki-retrieve-refresh.py — rechunk pages, rebuild the BM25 index, rebuild the link graph and theme chunks.
 
 Does not modify contextual-prefix.py, bm25-index.py or wiki-graph.py; only subprocesses them.
 
@@ -10,8 +10,10 @@ Usage:
 --no-llm is the default. Pass --allow-egress to let contextual-prefix use an LLM.
 The graph rebuild (`wiki-graph.py build`, a few seconds) runs after BM25 unless --no-graph;
 its failure is reported (graph_ok=false) but does not fail the refresh.
+`wiki-clusters.py build` follows the graph rebuild (surveys は読まない)。失敗は
+clusters_ok=false であり retrieve は落とさない。
 
-Stdout JSON: {pages, chunks_written, chunks_unchanged, bm25_ok, graph_ok}
+Stdout JSON: {pages, chunks_written, chunks_unchanged, bm25_ok, graph_ok, clusters_ok}
 
 Exit codes:
   0 — success
@@ -146,12 +148,21 @@ def main(argv=None):
         if not graph_ok:
             log(f"wiki-retrieve-refresh: wiki-graph.py build exit {graph.returncode} (retrieve keeps working without it)")
 
+    clusters_ok = None
+    clusters_py = SCRIPT_DIR / "wiki-clusters.py"
+    if clusters_py.is_file():
+        clusters = run_logged([sys.executable, str(clusters_py), "build"])
+        clusters_ok = clusters.returncode == 0
+        if not clusters_ok:
+            log(f"wiki-retrieve-refresh: wiki-clusters.py build exit {clusters.returncode} (retrieve keeps working without it)")
+
     payload = {
         "pages": page_count,
         "chunks_written": chunks_written if have_counts else None,
         "chunks_unchanged": chunks_unchanged if have_counts else None,
         "bm25_ok": bm25_ok,
         "graph_ok": graph_ok,
+        "clusters_ok": clusters_ok,
     }
     print(json.dumps(payload, ensure_ascii=False))
     return EXIT_CHILD if failed else EXIT_OK

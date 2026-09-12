@@ -386,7 +386,20 @@ python3 scripts/wiki-excerpt.py "wiki/concepts/<原名A>.md" "wiki/concepts/<原
   --sections 定義,子概念,未解決の問い,未編纂の観察 --tail 15 --budget-tokens 1800
 ```
 
-`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。
+`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 かつテーマ塊ハブの追加が 0 なら 9000 以上。追加ハブがあるときは `(更新する concept 数 + 追加ハブ数) * 1800` 以上。切れたページは読んだことにしない。
+
+`.vault-meta/clusters.json` を Read するな。見るなら CLI。失敗したら resolve / retrieve だけに落ちる。
+
+concept を書く前に、スキル世界のテーマ塊から `- 概念:` を足してよい。entity / source は `lookup` しない。frontmatter `related:` と `community:` は書かない。ハブ側へ相互 related は足さない。
+
+1. 今回の `wiki-resolve.py --compact` が当てた**既存 concept** を score 降順で最大 5 件 `lookup` する
+2. 直前の refresh 済みキャッシュを信じる。`lookup` が未構築で終了 3 のときだけ `python3 scripts/wiki-clusters.py build` を 1 回試す。stale では建て直さない。refresh の `clusters_ok` が false ならテーマ塊を使わない
+3. `on_backbone: true` の id について `python3 scripts/wiki-clusters.py members <id> --type concept --top 20`。自分・今回新規名・既存の `- 概念:` を除く
+4. resolve 集合に無いハブを `members` 順で最大 3 件取る。4 件目以降は開かない。すでに excerpt 済みのハブは追加読みしない。更新対象と同じ `wiki-excerpt.py` に載せる。`--budget-tokens 1800`。`--total-budget` は `(更新する concept 数 + 追加ハブ数) * 1800` 以上
+5. excerpt が今回 source の主題に接するものだけを `- 概念:` に足す。切れたページは読んだことにせず related に足さない。1 ページあたり概念 related は既存込み最大 5、うち塊由来は最大 3。この 3 は concept 新規 3 / 更新 5 の枠を消費しない
+6. 新規は `wiki-page-write.py` 初回本文の `## 関連` 行 `- 概念: [[...]] / [[...]]`。更新は同じ append batch の `related.概念`
+
+未構築のまま / 既存 concept 0 / 全て off-backbone / 接するハブ 0 なら、今どおり resolve 結果だけを related にする。JSON を開けて補完してはならない。
 
 **ハブ concept**(`## 子概念` がある、または厚いページ)は excerpt だけ読み、地図として扱う。具体的な知見は最も近い**子 concept** へ書く。ハブへは子へのリンクと、子をまたぐ観察だけを足す。
 

@@ -8,6 +8,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- スキル世界のテーマ塊。`wiki-clusters.py`（無向 Blondel）が `.vault-meta/clusters.json` を書き、ingest が concept の `- 概念:` を足すときに `lookup` / `members` だけを呼ぶ。契約は `plugins/wiki-lens/docs/clusters-for-skills.md`、数式は `plugins/wiki-lens/docs/theme-chunks-algorithm.md`。
+- `wiki-doctor.py` が `clusters.json` をキャッシュごとに鮮度検査する（`surveys/` は見ない。欠落は WARN）。
+- `wiki-retrieve-refresh.py` が graph のあと `wiki-clusters.py build` を呼ぶ（`clusters_ok`。失敗しても retrieve は落とさない）。
+
+### Changed
+
+- `wiki-ingest` / `wiki-ingest-paper` がテーマ塊から `- 概念:` を提案する。手順の正本は paper の `references/subagent-brief.md` §テーマ塊。
+- `wiki-gap` と `wiki-survey` フェーズ 3 はテーマ塊 CLI を呼ばない（封印）。
+- `wiki-lint` の doctor fix に `wiki-clusters.py build` を足す。
+- `templates/wiki-CLAUDE.md` にテーマ塊の鉄則（id 非書込み、`#id` 非突合、JSON 非 Read、`lookup` / `members` のみ）。
+
+画面の Directed Louvain とスキル世界の無向 Blondel は揃えない。`assign` は試験と将来フックであり、survey は呼ばない。`token-discipline.md` は `Read(**/*token*)` hook のため同じ出荷では触らない。
+
 ## [0.3.0] - 2026-09-11
 
 既読 source の軽い質問と配布用紹介文を、知識とは別の派生ノートとして残す。

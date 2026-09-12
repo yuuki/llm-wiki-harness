@@ -17,6 +17,8 @@ Division of labor (fixed by design):
 1. Read `wiki/CLAUDE.md` and `wiki/meta/conventions.md` (iron rule for any wiki/ operation).
 2. Report prose is Japanese 常体 per `wiki/meta/japanese-style.md`. Paper titles, APIs, and identifiers stay in the original language.
 
+`wiki-clusters.py` を呼ばない。Gap Finder 報告の `#id` を `clusters.json` および `members` と突合しない。間隙の正本は Copy report のままである。
+
 ## Step 1 — Obtain candidates
 
 Preferred input: the Markdown report produced by the Gap Finder view's **Copy report** button (the user pastes it, or points to a file). It contains four sections: cluster gaps, concept pairs (co-citation, with page paths and the common source paths), predicted links (Adamic-Adar, with page paths), bridge literature (missing `@`-prefixed sources; the plugin default is ≥1 cluster, ranked by demand), plus coverage notes.

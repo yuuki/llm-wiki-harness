@@ -232,7 +232,7 @@ concept ページは、複数ソースを横断した知識を compile した**�
 - 本文: `python3 scripts/wiki-excerpt.py`
 - 索引・ホット・ログの更新: `python3 scripts/wiki-catalog.py`(ファイルを Read して Edit しない)
 - query の第一経路: `python3 scripts/retrieve.py`(ページグラフがあれば第 3 路。`wiki-graph.py`)
-- ingest 後: `python3 scripts/wiki-retrieve-refresh.py --pages ... --no-llm`(BM25 と `graph.json` を差分更新)
+- ingest 後: `python3 scripts/wiki-retrieve-refresh.py --pages ... --no-llm`(BM25 と `graph.json` / `clusters.json` を差分更新。テーマ塊は `wiki-clusters.py lookup` / `members` だけ。JSON は Read しない)
 - 関心の要約: `python3 scripts/wiki-profile.py`(無い vault では終了 3。判定を飛ばす)
 - 束: `python3 scripts/wiki-context-pack.py`(subagent への引き継ぎ)
 - 機械状態: `python3 scripts/wiki-doctor.py`(lint の最初)

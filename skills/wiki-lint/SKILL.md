@@ -100,7 +100,7 @@ Work through these in order:
     python3 scripts/wiki-doctor.py            # OK / WARN / FAIL table with a fix: command per finding; exit 1 on any FAIL
     ```
 
-    Read-only. Apply the printed `fix:` commands yourself only for the derived caches (`wiki-retrieve-refresh.py`, `wiki-graph.py build`, `paper-ids.py scan --write-index`, `contradiction-index.py build`) and stale locks (`wiki-lock.sh reap`); everything else (duplicate `address:`, manifest gaps, `*.tmp` residue that may belong to a concurrent ingest, corrupt ledgers) is **Needs review**. Paste the table as **## Doctor** at the top of the report.
+    Read-only. Apply the printed `fix:` commands yourself only for the derived caches (`wiki-retrieve-refresh.py`, `wiki-graph.py build`, `wiki-clusters.py build`, `paper-ids.py scan --write-index`, `contradiction-index.py build`) and stale locks (`wiki-lock.sh reap`); everything else (duplicate `address:`, manifest gaps, `*.tmp` residue that may belong to a concurrent ingest, corrupt ledgers) is **Needs review**. Paste the table as **## Doctor** at the top of the report.
 
 ---
 

@@ -55,6 +55,7 @@ class DoctorTest(unittest.TestCase):
             make_vault(root)
             doc = import_script("wiki-doctor", root)
             ctx = {"pages": list(doc.wiki_pages()),
+                   "cluster_pages": list(doc.cluster_pages()),
                    "address_pages": list(doc.address_pages())}
             rep = doc.Report()
             for name, fn in doc.CHECKS:
@@ -106,6 +107,7 @@ class DoctorTest(unittest.TestCase):
                 encoding="utf-8")
             doc = import_script("wiki-doctor", root)
             ctx = {"pages": list(doc.wiki_pages()),
+                   "cluster_pages": list(doc.cluster_pages()),
                    "address_pages": list(doc.address_pages())}
             self.assertFalse(any(p.name == "@2026__X__Alpha.md" and "briefs" in p.parts
                                  for p in ctx["pages"]))

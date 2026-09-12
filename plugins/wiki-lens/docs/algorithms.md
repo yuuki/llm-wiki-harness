@@ -14,11 +14,13 @@ wiki-lens は Obsidian の LLM wiki レイヤー(`wiki/{sources,entities,concept
 
 ## 1. Louvain法によるコミュニティ検出(クラスタ抽出)
 
-**問題**: 4000ページ・数万リンクのグラフに、人間が読める「テーマの塊」はあるか。
+**問題**: 数千ページ・数万リンク規模のグラフに、人間が読める「テーマの塊」はあるか。
 
 **手法**: Louvain法は、各ノードを「自分をどのコミュニティに属させればモジュラリティ(コミュニティ内の辺密度が偶然より高い度合いを表す指標)が最大化するか」という基準で貪欲に付け替え、収束したらコミュニティをひとつのノードに畳み込んで同じ操作を再帰する、という2段階を繰り返す手法である。計算量はほぼ線形で、数千ノード程度なら一瞬で終わる。
 
 **使い所**: Backbone Graph のクラスタ表示、Gap Finder のクラスタ間隙検出、3D Layers のレイアウト前処理。frontmatter の `domain` フィールド(表記ゆれが300種類以上あり実用に耐えない)の代わりに、リンク構造そのものから「テーマ」を計算で導いている。
+
+これは画面の **Directed Louvain**（`src/core/cluster.ts`）である。スキルが ingest で使うテーマ塊は別レシピの無向 Blondel（`scripts/wiki-clusters.py`）であり、分割も ID も揃えない。契約は [`clusters-for-skills.md`](clusters-for-skills.md)、数式は [`theme-chunks-algorithm.md`](theme-chunks-algorithm.md)。
 
 ## 2. Personalized PageRank(個人化PageRank, PPR)— Local Lens
 

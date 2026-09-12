@@ -345,7 +345,22 @@ python3 scripts/wiki-excerpt.py "wiki/concepts/異常検知.md" "wiki/concepts/R
   --sections 定義,子概念,未解決の問い,未編纂の観察 --tail 15 --budget-tokens 1800
 ```
 
-If you use `--total-budget`, set it to at least `N * --budget-tokens` (9000 or more when the update cap is 5). Do not treat a skipped page as read. Pages are separated by a `=== <path> ===` line; `--fm-keys none` drops frontmatter when you only want bodies.
+If you use `--total-budget`, set it to at least `N * --budget-tokens` (9000 or more when the update cap is 5 and no theme-chunk hubs are added). Do not treat a skipped page as read. Pages are separated by a `=== <path> ===` line; `--fm-keys none` drops frontmatter when you only want bodies.
+
+### Theme chunks (`wiki-clusters.py`) — concept `## 関連` only
+
+Do **not** Read `.vault-meta/clusters.json`. If the CLI fails, fall back to resolve / retrieve only. Never open the JSON to fill gaps.
+
+Before writing new or updated **concept** pages, propose `- 概念:` links from the skill-world theme chunk. Do not lookup entity or source. Do not write `community:` or frontmatter `related:`. Do not add reciprocal related on the hub side.
+
+1. Take up to 5 existing **concept** hits from this ingest's `wiki-resolve.py --compact` (score descending). `lookup` each.
+2. Trust the last refresh cache. Run `python3 scripts/wiki-clusters.py build` once only when `lookup` exits 3 because the cache is missing. Do not rebuild for staleness mid-ingest. If that refresh reported `clusters_ok=false`, skip theme chunks.
+3. For each `on_backbone: true` id, run `python3 scripts/wiki-clusters.py members <id> --type concept --top 20`. Drop self, this ingest's new names, and names already on `- 概念:`.
+4. Of hubs not already in the resolve set, take at most 3 in `members` order. Do not open a 4th. Do not re-read a hub already on the excerpt list. Put extras on the **same** `wiki-excerpt.py` call as the concepts you are updating. `--budget-tokens 1800`. `--total-budget` ≥ `(updated concepts + extra hubs) * 1800`. A skipped page is unread; do not add it.
+5. Add a hub to `- 概念:` only when the excerpt actually touches this source's subject. Cap: 5 concept related per page including existing; at most 3 of those from theme chunks. These 3 do not consume the new-3 / update-5 concept page budget.
+6. New pages: put `- 概念: [[...]] / [[...]]` in the initial `wiki-page-write.py` body. Updates: the same page's `wiki-append.py --batch` `related.概念`. One batch with inbox / sources.
+
+If the cache is missing, every lookup is off-backbone, or no excerpted hub touches the source, keep resolve-only related. Never open the JSON to fill gaps.
 
 Never read a full fat concept/entity page. Patch the relevant section tail; do not re-read the whole file to edit one field.
 

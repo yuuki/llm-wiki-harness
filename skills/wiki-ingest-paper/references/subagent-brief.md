@@ -35,7 +35,7 @@ fetch が `page-*.png` の掃除まで行う。手で `find` / `python -c` し�
 - 新規: `python3 scripts/wiki-page-write.py --batch spec.json`
 - 既存追記: `python3 scripts/wiki-append.py --batch spec.json`
 
-**ヘルパーを lock で包まない。** **新規を `Write` で作らない**(page-write だけ)。**1 ページに複数回 Edit しない**。resolve は `--compact` で一括。excerpt は複数ページ 1 回。カタログ全文は Read しない。`allocate-address.sh` の採番はヘルパー外では失敗する。
+**ヘルパーを lock で包まない。** **新規を `Write` で作らない**(page-write だけ)。**1 ページに複数回 Edit しない**。resolve は `--compact` で一括。excerpt は複数ページ 1 回。カタログ全文と `.vault-meta/clusters.json` は Read しない。`allocate-address.sh` の採番はヘルパー外では失敗する。テーマ塊は下の節に従え。
 
 ## 画像
 
@@ -88,7 +88,23 @@ frontmatter: `address:`(ヘルパー採番)、日付タグ先頭、`type: source
 
 ## concept
 
-追記は `wiki-append.py` だけ。対象は `## 未編纂の観察` と `## 未解決の問い`。**主題節を書き換えない。** **単一ソース事実は受信箱に書かない。** 単一論文で閉じる用語は source に留める。**新規最大 3 / 更新最大 5。** 溢れたら log 用に `Deferred:` を報告する。**ハブ concept は子へ書く**(ハブへは子へのリンクと子をまたぐ観察だけ)。矛盾は `> [!contradiction]`。
+追記は `wiki-append.py` だけ。対象は `## 未編纂の観察` と `## 未解決の問い`。**主題節を書き換えない。** **単一ソース事実は受信箱に書かない。** 単一論文で閉じる用語は source に留める。**新規最大 3 / 更新最大 5。** 溢れたら log 用に `Deferred:` を報告する。**ハブ concept は子へ書く**(ハブへは子へのリンクと子をまたぐ観察だけ)。矛盾は `> [!contradiction]`。`- 概念:` は下のテーマ塊手順に従う。
+
+## テーマ塊
+
+`.vault-meta/clusters.json` を Read するな。見るなら CLI。失敗したら resolve / retrieve だけに落ちる。wiki-survey の精読クラスタと混同するな。Gap Finder の `#id` と突合するな。`wiki-clusters.py assign` は呼ぶな。
+
+対象は今回新規作成または更新する concept だけである。entity / source は `lookup` しない。frontmatter `related:` と `community:` は書かない。ハブ側へ相互 related は足さない。
+
+1. 今回の `wiki-resolve.py --compact` が当てた**既存 concept** を score 降順で最大 5 件 `lookup` する
+2. 直前の refresh 済みキャッシュを信じる。`lookup` が未構築で終了 3 のときだけ `python3 scripts/wiki-clusters.py build` を 1 回試す。ページ欠落の終了 3 では建て直さない。stale では建て直さない。refresh の `clusters_ok` が false ならテーマ塊を使わない
+3. `on_backbone: true` の id について `python3 scripts/wiki-clusters.py members <id> --type concept --top 20`。自分・今回新規名・既存の `- 概念:` を除く
+4. resolve 集合に無いハブを `members` 順で最大 3 件取る。4 件目以降は開かない。すでに excerpt 済みのハブは追加読みしない。更新対象と同じ `wiki-excerpt.py` に載せる。`--budget-tokens 1800`。`--total-budget` は `(更新する concept 数 + 追加ハブ数) * 1800` 以上
+5. excerpt が今回 source の主題に接するものだけを `- 概念:` に足す。切れたページは読んだことにせず related に足さない
+6. 1 ページの `- 概念:` は既存込み最大 5、うち塊由来は最大 3。この 3 は concept 新規 3 / 更新 5 の枠を消費しない
+7. 新規は `wiki-page-write.py` 初回本文の `## 関連` 行 `- 概念: [[...]] / [[...]]`。更新は同じ append batch の `related.概念`。別 Edit を増やさない
+
+未構築のまま / 既存 concept 0 / 全て `on_backbone: false` / 接するハブ 0 なら、今どおり resolve 結果だけを related にする。JSON を開けて補完してはならない。
 
 ## 触ってはいけないファイル
 

@@ -17,7 +17,7 @@ hot 窓の超過、一時ファイルの残骸。本スクリプトはそれら�
   bm25_freshness        索引の updated_at より新しい wiki ページの数
   stale_chunks          page_path が存在しない chunk(ページの移動・削除の残骸)
   unchunked_pages       chunk が無い wiki ページ(新規・未 refresh)
-  derived_caches        graph.json / paper-ids.json / contradictions.json の鮮度
+  derived_caches        graph.json / paper-ids.json / contradictions.json / clusters.json の鮮度
   locks                 .vault-meta/locks の残留(1 時間超は放置ロック)
   address_counter       address-counter.txt と最大 address、重複 address
   manifest              .raw/.manifest.json の原本欠落と未登録原本
@@ -47,6 +47,7 @@ from pathlib import Path
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 META = VAULT_ROOT / ".vault-meta"
 KNOWLEDGE_DIRS = ("sources", "entities", "concepts", "questions", "surveys")
+CLUSTER_DIRS = ("sources", "entities", "concepts", "questions")
 COMPANION_DIRS = ("asks", "briefs")
 WIKI_DIRS = KNOWLEDGE_DIRS
 ADDRESS_RE = re.compile(r"^address:\s*\"?(c-\d{6})\"?\s*$", re.M)
@@ -74,6 +75,11 @@ def wiki_pages():
 def address_pages():
     """address 重複検査は派生ノートも含める。"""
     yield from iter_wiki_md(*KNOWLEDGE_DIRS, *COMPANION_DIRS)
+
+
+def cluster_pages():
+    """テーマ塊の鮮度入力。surveys は見ない。"""
+    yield from iter_wiki_md(*CLUSTER_DIRS)
 
 
 def rel(p):
@@ -178,22 +184,27 @@ def check_unchunked_pages(r, ctx):
 
 
 def check_derived_caches(r, ctx):
-    newest = max((p.stat().st_mtime for p in ctx["pages"]), default=0)
-    notes, stale = [], []
-    for name, fix in (("graph.json", "python3 scripts/wiki-graph.py build"),
-                      ("paper-ids.json", "python3 scripts/paper-ids.py scan --write-index"),
-                      ("contradictions.json", "python3 scripts/contradiction-index.py build")):
+    notes, problems, fixes = [], [], []
+    specs = (
+        ("graph.json", "python3 scripts/wiki-graph.py build", ctx["pages"]),
+        ("paper-ids.json", "python3 scripts/paper-ids.py scan --write-index", ctx["pages"]),
+        ("contradictions.json", "python3 scripts/contradiction-index.py build", ctx["pages"]),
+        ("clusters.json", "python3 scripts/wiki-clusters.py build", ctx["cluster_pages"]),
+    )
+    for name, fix, pages in specs:
         f = META / name
         if not f.is_file():
-            notes.append(f"{name} 無し")
+            problems.append(f"{name} 無し")
+            fixes.append(fix)
             continue
-        behind = sum(1 for p in ctx["pages"] if p.stat().st_mtime > f.stat().st_mtime)
+        behind = sum(1 for p in pages if p.stat().st_mtime > f.stat().st_mtime)
         if behind:
-            stale.append(f"{name} より新しいページ {behind} 頁({fix})")
+            problems.append(f"{name} より新しいページ {behind} 頁")
+            fixes.append(fix)
         else:
             notes.append(f"{name} 最新")
-    if stale:
-        r.warn("derived_caches", "、".join(stale + notes))
+    if problems:
+        r.warn("derived_caches", "、".join(problems + notes), " ; ".join(dict.fromkeys(fixes)))
     else:
         r.ok("derived_caches", "、".join(notes))
 
@@ -441,7 +452,11 @@ def main(argv=None):
     if unknown:
         print(f"ERR: unknown check: {', '.join(sorted(unknown))}", file=sys.stderr)
         return 2
-    ctx = {"pages": list(wiki_pages()), "address_pages": list(address_pages())}
+    ctx = {
+        "pages": list(wiki_pages()),
+        "cluster_pages": list(cluster_pages()),
+        "address_pages": list(address_pages()),
+    }
     report = Report()
     for name, fn in CHECKS:
         if wanted and name not in wanted:

@@ -11,7 +11,7 @@
 - 媒体別 ingest（論文・書籍・博士論文・スライド・動画）と、vault 側で分岐した `wiki-ingest` / `wiki-query` / `wiki-lint`
 - `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate` / `wiki-ask-source` / `wiki-brief-source`
 - 日本語整文（`japanese-tech-writing` と `conventions/japanese-style.md`）
-- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `concept-candidates.py` / `paper-ids.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py`）
+- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `wiki-clusters.py` / `concept-candidates.py` / `paper-ids.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py`）
 - 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
 - 読み取り専用の Obsidian プラグイン `wiki-lens`
 
@@ -127,7 +127,16 @@ wiki/sources ──► wiki/entities
 | 3D Layers | 層はどう結合するか |
 | Gap Finder | 無い接続は何か |
 
-構造の検出までがプラグイン、意味の判定と橋渡し文献は `wiki-gap` である。案内は [`plugins/wiki-lens/README.md`](plugins/wiki-lens/README.md)。算法は [`plugins/wiki-lens/docs/algorithms.md`](plugins/wiki-lens/docs/algorithms.md)。
+構造の検出までがプラグイン、意味の判定と橋渡し文献は `wiki-gap` である。案内は [`plugins/wiki-lens/README.md`](plugins/wiki-lens/README.md)。算法は [`plugins/wiki-lens/docs/algorithms.md`](plugins/wiki-lens/docs/algorithms.md)。画面の Louvain と、スキルが使う無向 Blondel（`wiki-clusters.py`、[`docs/theme-chunks-algorithm.md`](plugins/wiki-lens/docs/theme-chunks-algorithm.md)）は別物である。ingest だけがテーマ塊を呼び、`wiki-gap` / `wiki-survey` は呼ばない。
+
+索引を全消しして作り直すときは `clusters.json` も消す。本ハーネスに `wiki-retrieve` skill は無い（上流）。
+
+```bash
+rm -rf .vault-meta/chunks/ .vault-meta/bm25/ .vault-meta/embed-cache.json .vault-meta/graph.json .vault-meta/clusters.json
+bash bin/setup-retrieve.sh
+python3 scripts/wiki-graph.py build
+python3 scripts/wiki-clusters.py build
+```
 
 ビルド済みの `main.js` を同梱している。ソースから作り直すなら:
 
@@ -150,6 +159,7 @@ python3 scripts/test_contradiction_index.py
 python3 scripts/test_recompile_queue.py
 python3 scripts/test_claim_audit.py
 python3 scripts/test_wiki_graph.py
+python3 scripts/test_wiki_clusters.py
 python3 scripts/test_concept_candidates.py
 python3 scripts/test_paper_ids.py
 python3 scripts/test_entity_resolve.py

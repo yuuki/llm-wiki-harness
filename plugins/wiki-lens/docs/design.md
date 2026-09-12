@@ -60,6 +60,8 @@ Wiki Lens answers each question with a dedicated view over a single shared index
 
 The wiki's `domain` frontmatter has 300+ free-text variants and is useless as a classification axis. Thematic structure is therefore *computed* from the link topology (Louvain, edge weight = link count) and labeled by each cluster's top-2 in-degree members.
 
+This on-screen Directed Louvain is not the skill-world theme-chunk recipe. Agents read undirected Blondel from `scripts/wiki-clusters.py` ([`clusters-for-skills.md`](clusters-for-skills.md), [`theme-chunks-algorithm.md`](theme-chunks-algorithm.md)); mismatched partitions are not a defect.
+
 ### 4.3 ForceAtlas2 on the main thread, chunked
 
 *Why not a Web Worker?* It would require esbuild bundle splitting for a workload that completes in a few seconds at worst. Instead, layout runs 5 iterations per animation frame (total iterations scale with graph order, capped at 600), keeping the UI responsive.

@@ -4,7 +4,7 @@ LLM wiki レイヤー（`wiki/{sources,entities,concepts,questions}/`）の健�
 
 ノートは書かない。通信しない。索引は Obsidian の `metadataCache` と、時間軸の注釈だけ `wiki/log.md` を読む。vault の一次ノート層は見ない。
 
-英語の原版は [`README.en.md`](README.en.md)。設計は [`docs/design.md`](docs/design.md)、実装は [`docs/implementation.md`](docs/implementation.md)、算法は [`docs/algorithms.md`](docs/algorithms.md)。
+英語の原版は [`README.en.md`](README.en.md)。設計は [`docs/design.md`](docs/design.md)、実装は [`docs/implementation.md`](docs/implementation.md)、算法は [`docs/algorithms.md`](docs/algorithms.md)。画面の Louvain と、スキル世界のテーマ塊（無向 Blondel。[`docs/clusters-for-skills.md`](docs/clusters-for-skills.md) / [`docs/theme-chunks-algorithm.md`](docs/theme-chunks-algorithm.md)）は別物である。
 
 ## 6 つのビュー
 

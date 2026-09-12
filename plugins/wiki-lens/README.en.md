@@ -4,6 +4,8 @@ A **read-only** Obsidian plugin that visualizes the health, explorability, and g
 
 The plugin never writes to any note. It only reads Obsidian's `metadataCache` (plus one best-effort read of `wiki/log.md`), and it makes no network requests — everything runs locally.
 
+On-screen Louvain (`src/core/cluster.ts`) is not the skill-world theme-chunk cache. Agents use undirected Blondel via `scripts/wiki-clusters.py` ([`docs/clusters-for-skills.md`](docs/clusters-for-skills.md), [`docs/theme-chunks-algorithm.md`](docs/theme-chunks-algorithm.md)).
+
 ## Views
 
 | View | Icon | What it shows |

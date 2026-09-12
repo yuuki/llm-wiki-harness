@@ -7,4 +7,6 @@
 .vault-meta/*.lock
 .vault-meta/bm25/
 .vault-meta/address-counter.txt
+.vault-meta/graph.json
+.vault-meta/clusters.json
 plugins/wiki-lens/data.json
