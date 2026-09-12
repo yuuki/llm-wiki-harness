@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-13
+
+スキル世界のテーマ塊を置き、ingest が concept の関連リンクを機械的に足せるようにする。
+
 ### Added
 
 - スキル世界のテーマ塊。`wiki-clusters.py`（無向 Blondel）が `.vault-meta/clusters.json` を書き、ingest が concept の `- 概念:` を足すときに `lookup` / `members` だけを呼ぶ。契約は `plugins/wiki-lens/docs/clusters-for-skills.md`、数式は `plugins/wiki-lens/docs/theme-chunks-algorithm.md`。
