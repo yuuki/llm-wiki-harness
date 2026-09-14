@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-14
+
+出典付きのグラフ路と開いているページの配役近傍を置き、和文 BM25 を CJK 2-gram にする。
+
 ### Added
 
 - ページグラフ version 2。主題節の命題から出典付き辺（`claim-link` / `claim-cite`）を取り、`retrieve.py` のグラフ路候補に `via` を付ける。抽出は `wiki_claims.py`。
