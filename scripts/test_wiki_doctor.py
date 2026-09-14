@@ -67,6 +67,7 @@ class DoctorTest(unittest.TestCase):
             self.assertEqual(by["stale_chunks"]["status"], "WARN")
             self.assertIn("Gone.md", by["stale_chunks"]["detail"])
             self.assertEqual(by["unchunked_pages"]["status"], "WARN")
+            self.assertEqual(by["bm25_schema"]["status"], "WARN")
             self.assertEqual(by["bm25_freshness"]["status"], "WARN")
             self.assertEqual(by["locks"]["status"], "WARN")
             self.assertEqual(by["manifest"]["status"], "WARN")

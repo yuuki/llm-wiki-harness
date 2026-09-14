@@ -656,6 +656,11 @@ def member_sort_key(rec, path):
 def cmd_build(_args):
     try:
         payload = build_payload()
+        scripts = Path(__file__).resolve().parent
+        if str(scripts) not in sys.path:
+            sys.path.insert(0, str(scripts))
+        from wiki_related_cache import wipe_related_cache
+        wipe_related_cache(VAULT_ROOT)
         atomic_write(VAULT_ROOT / CLUSTERS_REL, json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     except Exception as exc:
         log(f"ERR: build failed: {exc}")

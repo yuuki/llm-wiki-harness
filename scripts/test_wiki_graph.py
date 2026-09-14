@@ -65,6 +65,21 @@ class GraphFixture(unittest.TestCase):
             encoding="utf-8")
         self.write("wiki/sources/@2020__X__S1.md", page("source", "S1", "c-000006", "Source one body."))
         self.write("wiki/sources/@2021__Y__S2.md", page("source", "S2", "c-000007", "Source two body."))
+        # claim-link 用の別ページ。S2 は引かない(C–D の cocite 重み 0.5 を壊さない)
+        self.write("wiki/concepts/P.md", page(
+            "concept", "P", "c-000010",
+            "## 定義\n\nqueue pair handshake.\n\n"
+            "## 性質\n\n"
+            "- **[[H]] は [[I]] と対になる。** (Source: [[@2022__Z__S3]])\n"))
+        pad = ("alpha bravo " * 220).strip()
+        self.write("wiki/concepts/H.md", page(
+            "concept", "H", "c-000011",
+            f"{pad}\n\nfibrillate waveform capture on later chunk.\n"))
+        self.write("wiki/concepts/I.md", page("concept", "I", "c-000012",
+                   "Sibling concept without the query tokens.\n"))
+        self.write("wiki/concepts/Q.md", page("concept", "Q", "c-000013",
+                   "## 未編纂の観察\n\n- [[H]] への言及。\n"))
+        self.write("wiki/sources/@2022__Z__S3.md", page("source", "S3", "c-000014", "Source three body."))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -87,7 +102,7 @@ class GraphFixture(unittest.TestCase):
 class WikiGraphTest(GraphFixture):
     def test_build_links_reciprocal_bonus_and_cocitation(self):
         out = json.loads(self.run_ok("wiki-graph.py", "build").stdout)
-        self.assertEqual(out["nodes"], 9)
+        self.assertEqual(out["nodes"], 14)
         g = self.graph()
         adj = g["adj"]
         a, b, c, d = "wiki/concepts/A.md", "wiki/concepts/B.md", "wiki/concepts/C.md", "wiki/entities/D.md"
@@ -98,8 +113,8 @@ class WikiGraphTest(GraphFixture):
         self.assertAlmostEqual(adj[a][c], 1.0, places=6)
         # C – D: 共通出典 S2 のみ
         self.assertAlmostEqual(adj[c][d], 0.5, places=6)
-        # frontmatter sources も link 辺になる(A → S1)。source 同士に共通出典の辺は無い。E は孤立
-        self.assertAlmostEqual(adj[a]["wiki/sources/@2020__X__S1.md"], 1.0, places=6)
+        # frontmatter sources は fm-source 0.6。source 同士に共通出典の辺は無い。E は孤立
+        self.assertAlmostEqual(adj[a]["wiki/sources/@2020__X__S1.md"], 0.6, places=6)
         self.assertNotIn("wiki/sources/@2021__Y__S2.md", adj["wiki/sources/@2020__X__S1.md"])
         self.assertEqual(adj["wiki/concepts/E.md"], {})
         self.assertEqual(g["stats"]["isolated"], 1)
@@ -117,14 +132,57 @@ class WikiGraphTest(GraphFixture):
         self.assertNotIn("D", names)  # 1 hop では届かない
         out2 = json.loads(self.run_ok("wiki-graph.py", "neighbors", "wiki/concepts/A.md", "--hops", "2").stdout)
         self.assertIn("D", [n["name"] for n in out2["neighbors"]])
+        d = next(n for n in out2["neighbors"] if n["name"] == "D")
+        self.assertEqual(len(d["via"]), 2)
+        self.assertEqual(d["via"][0]["to"], "wiki/concepts/C.md")
+        self.assertEqual(d["via"][1]["from"], "wiki/concepts/C.md")
+        self.assertNotIn("kind", d["via"][1])
         res = run_script("wiki-graph.py", ["neighbors", "Nope"], self.vault)
         self.assertEqual(res.returncode, 3)
+
+    def test_claim_link_has_sources_and_does_not_link_siblings(self):
+        self.run_ok("wiki-graph.py", "build")
+        g = self.graph()
+        p, h, i = "wiki/concepts/P.md", "wiki/concepts/H.md", "wiki/concepts/I.md"
+        s3 = "wiki/sources/@2022__Z__S3.md"
+        key_ph = "\t".join(sorted([p, h]))
+        key_hi = "\t".join(sorted([h, i]))
+        meta = g["edge_meta"][key_ph]
+        self.assertEqual(meta["kind"], "claim-link")
+        self.assertEqual(meta["sources"], [s3])
+        self.assertEqual(meta["loc"], "性質")
+        self.assertGreater(g["adj"][p][h], 1.0)
+        self.assertNotIn(key_hi, g["edge_meta"])
+        self.assertNotIn(i, g["adj"].get(h, {}))
+        from_h = json.loads(self.run_ok("wiki-graph.py", "neighbors", "H", "--hops", "1").stdout)
+        self.assertNotIn("I", [n["name"] for n in from_h["neighbors"]])
+        why = json.loads(self.run_ok("wiki-graph.py", "why", "P", "H").stdout)
+        self.assertEqual(why["kind"], "claim-link")
+        self.assertEqual(why["sources"], [s3])
+        why_cd = json.loads(self.run_ok("wiki-graph.py", "why", "C", "D").stdout)
+        self.assertEqual(why_cd, {"weight": 0.5})
+        self.assertNotIn("kind", why_cd)
+        why_ab = json.loads(self.run_ok("wiki-graph.py", "why", "A", "B").stdout)
+        self.assertEqual(why_ab, {"weight": 2.0})
+        self.assertNotIn("kind", why_ab)
+        missing = run_script("wiki-graph.py", ["why", "H", "I"], self.vault)
+        self.assertEqual(missing.returncode, 3)
+
+    def test_inbox_mention_is_not_claim_link(self):
+        self.run_ok("wiki-graph.py", "build")
+        g = self.graph()
+        q, h = "wiki/concepts/Q.md", "wiki/concepts/H.md"
+        key = "\t".join(sorted([q, h]))
+        self.assertNotIn(key, g["edge_meta"])
+        self.assertAlmostEqual(g["adj"][q][h], 1.0, places=6)
+        why = json.loads(self.run_ok("wiki-graph.py", "why", "Q", "H").stdout)
+        self.assertEqual(why, {"weight": 1.0})
 
     def test_stats_requires_graph(self):
         res = run_script("wiki-graph.py", ["stats"], self.vault)
         self.assertEqual(res.returncode, 3)
         self.run_ok("wiki-graph.py", "build")
-        self.assertEqual(json.loads(self.run_ok("wiki-graph.py", "stats").stdout)["nodes"], 9)
+        self.assertEqual(json.loads(self.run_ok("wiki-graph.py", "stats").stdout)["nodes"], 14)
 
 
 class RetrieveGraphChannelTest(GraphFixture):
@@ -134,7 +192,7 @@ class RetrieveGraphChannelTest(GraphFixture):
         self.run_ok("bm25-index.py", "build")
 
     def retrieve(self, *args):
-        res = self.run_ok("retrieve.py", "RDMA verbs queue pair", "--no-rerank", "--top", "5", *args)
+        res = self.run_ok("retrieve.py", "RDMA verbs queue pair", "--no-rerank", "--top", "10", *args)
         return res.stdout
 
     def test_absent_and_empty_graph_leave_output_byte_identical(self):
@@ -182,6 +240,70 @@ class RetrieveGraphChannelTest(GraphFixture):
         out = json.loads(self.retrieve("--graph-top", "0", "--explain"))
         self.assertEqual(out["explain"]["graph"]["added"], [])
         self.assertNotIn("wiki/concepts/C.md", [c["page_path"] for c in out["candidates"]])
+
+    def test_retrieve_explain_via_sources_on_claim_link_neighbour(self):
+        self.run_ok("wiki-graph.py", "build")
+        out = json.loads(self.retrieve("--explain"))
+        h = next(c for c in out["candidates"] if c["page_path"] == "wiki/concepts/H.md")
+        self.assertEqual(h["channels"], ["graph"])
+        self.assertEqual(h["via"][0]["kind"], "claim-link")
+        self.assertEqual(h["via"][0]["sources"], ["wiki/sources/@2022__Z__S3.md"])
+        self.assertGreater(out["explain"]["graph"]["via_count"], 0)
+
+    def test_retrieve_two_hop_via_midpoint(self):
+        self.run_ok("wiki-graph.py", "build")
+        res = self.run_ok(
+            "retrieve.py", "RDMA verbs queue pair",
+            "--no-rerank", "--top", "20", "--graph-hops", "2", "--graph-top", "20", "--explain")
+        out = json.loads(res.stdout)
+        d = next(c for c in out["candidates"] if c["page_path"] == "wiki/entities/D.md")
+        self.assertEqual(len(d["via"]), 2)
+        self.assertEqual(d["via"][0]["to"], "wiki/concepts/C.md")
+        self.assertEqual(d["via"][1]["from"], "wiki/concepts/C.md")
+        self.assertNotIn("kind", d["via"][1])
+
+    def test_v1_graph_loads_without_via(self):
+        self.run_ok("wiki-graph.py", "build")
+        g = self.graph()
+        v1 = {"version": 1, "nodes": g["nodes"], "adj": g["adj"], "stats": g["stats"]}
+        (self.vault / ".vault-meta/graph.json").write_text(
+            json.dumps(v1), encoding="utf-8")
+        out = json.loads(self.retrieve("--explain"))
+        self.assertTrue(out["strategy"].endswith("+graph"))
+        for c in out["candidates"]:
+            self.assertNotIn("via", c)
+        self.assertEqual(out["explain"]["graph"]["via_count"], 0)
+
+    def test_graph_only_uses_best_later_chunk(self):
+        self.run_ok("wiki-graph.py", "build")
+        res = self.run_ok(
+            "retrieve.py", "queue pair fibrillate",
+            "--no-rerank", "--top", "10", "--bm25-top", "2", "--explain")
+        out = json.loads(res.stdout)
+        h = next(c for c in out["candidates"] if c["page_path"] == "wiki/concepts/H.md")
+        self.assertEqual(h["channels"], ["graph"])
+        self.assertNotEqual(h["chunk_index"], 0)
+        self.assertTrue(str(h["chunk_id"]).endswith(":1"))
+
+    def test_best_chunk_synthetic_address_and_zero_score(self):
+        import hashlib
+        import importlib.util
+        os.environ["WIKI_VAULT_ROOT"] = str(self.vault)
+        spec = importlib.util.spec_from_file_location(
+            "bm25_index_fixture", SCRIPTS / "bm25-index.py")
+        bm25 = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bm25)
+        rel = "wiki/concepts/F.md"
+        addr = "syn-" + hashlib.sha1(rel.encode("utf-8")).hexdigest()[:6]
+        idx = bm25.load_index()
+        hit = bm25.best_chunk("Optical circuit", addr, index=idx)
+        self.assertIsNotNone(hit)
+        self.assertTrue(hit["chunk_id"].startswith(addr + ":"))
+        zero = bm25.best_chunk("存在しない和文だけの問い", addr, index=idx)
+        self.assertEqual(zero["chunk_id"], f"{addr}:0")
+        (self.vault / ".vault-meta/bm25/index.json").unlink()
+        again = bm25.best_chunk("Optical circuit", addr, index=idx)
+        self.assertEqual(again["chunk_id"], hit["chunk_id"])
 
 
 if __name__ == "__main__":

@@ -568,7 +568,7 @@ git commit -m "wiki: ingest-paper | <論文タイトル>"
 
 不要な候補パスは外してから実行する。コミットメッセージの形式: `wiki: ingest-paper | <論文タイトル>`。タイトルは source ページの `title:` フィールドの値(原語)をそのまま使う。
 
-コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**(`wiki/log.md` には書かない。log エントリはセッション終了前に書かれるため数値が確定しない)。`--latest` は並行 ingest で他人のセッションを拾うので使わない。環境変数が空で `--self` が落ちたら `--session <このセッションの ID>` を渡し、それでも `--latest` にはしない。振り返りには `--since YYYY-MM-DD` を使う。subagent の使用量は親ログに含まれないので、並列 ingest の値はオーケストレータ側だけのものになる。完了報告には `contact-sheet: N sheets / individual-reads: K` を必ず含める。
+コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**(`wiki/log.md` には書かない。log エントリはセッション終了前に書かれるため数値が確定しない)。`--self` は `CLAUDE_CODE_SESSION_ID`(Claude Code)、`CODEX_THREAD_ID`(Codex。無ければ `CODEX_SESSION_ID`)、`CURSOR_CONVERSATION_ID`(Cursor)をこの順で見る。環境変数が空で `--self` が落ちたら `--session <このセッションの ID>` を渡し、それでも `--latest` にはしない。Cursor / Codex 経由でもスキップしない。Cursor の数値は transcript と composer スナップショットからの概算で、行末が `Cursor概算` になる。Codex のトークンは `~/.codex/sessions/**/rollout-*.jsonl` の `token_usage_record` の実測で、行末が `Codex定価目安` になる。Codex Plus の実請求ではなく、Claude / Cursor の数値と混ぜて前後比較しない。振り返りには `--since YYYY-MM-DD` を使う。subagent の使用量は親ログに含まれないので、並列 ingest の値はオーケストレータ側だけのものになる。完了報告には `contact-sheet: N sheets / individual-reads: K` を必ず含める。
 
 ---
 
@@ -587,7 +587,7 @@ git commit -m "wiki: ingest-paper | <論文タイトル>"
 - **並行 ingest で同じ entity を後勝ち上書きしない。** 書き込み直前に resolve し、既存なら append。衝突したらマージ復旧せず止める。
 - **シートで番号が付いた attachment を Read しない。** `individual-reads` はシートを除く画像 Read の実数。
 - **このセッションのまま `wiki-ingest-thesis` を完走しない。** 長編と分かったら新セッションへ差し戻す。`fetch-book.sh` を paper セッションから呼ばない。
-- **完了報告の計測に `--latest` を使わない。** `--self`(失敗時だけ `--session <ID>`)にする。
+- **完了報告の計測に `--latest` を使わない。** `--self`(Claude Code / Codex / Cursor の環境変数。失敗時だけ `--session <ID>`)にする。Cursor や Codex 経由を理由にスキップしない。
 
 ---
 

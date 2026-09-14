@@ -553,7 +553,7 @@ tr '\n' '\0' < "$TMPDIR/book_files.txt" | xargs -0 git add --
 - **subagent が独断でコミットしていた場合**は、そのコミットに他章や他セッションのファイルが巻き込まれていないかを `git show --name-only <sha>` で確認する。巻き込みがなければ履歴が 2 つに割れるだけなので巻き戻さず、log の備考に「N 章分は先行コミット `<sha>` に含まれる」と書いて残す。**巻き込みがあった場合はユーザーに報告して判断を仰ぐ**(勝手に履歴を書き換えない)。
 - 先行コミット済みの章のファイルは `git status` に出てこない。**Step 4 のページ一覧を組み立てるときは、そのコミットの `git show --name-only` を合流させる**(合流させないと索引・log から丸ごと落ちる)。
 
-コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**(`wiki/log.md` には書かない。log エントリはセッション終了前に書かれるため数値が確定しない)。`--latest` は並行 ingest で他人を拾うので使わない。環境変数が空なら `--session <このセッションの ID>`。振り返りには `--since YYYY-MM-DD` を使う。章ごとに subagent へ委譲した場合、subagent 側の使用量は親ログに含まれないため、この値はオーケストレータ側だけのものになる。
+コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**(`wiki/log.md` には書かない。log エントリはセッション終了前に書かれるため数値が確定しない)。`--self` は `CLAUDE_CODE_SESSION_ID`(Claude Code)、`CODEX_THREAD_ID`(Codex。無ければ `CODEX_SESSION_ID`)、`CURSOR_CONVERSATION_ID`(Cursor)をこの順で見る。環境変数が空なら `--session <このセッションの ID>`。Cursor / Codex 経由でも `--latest` には落とさない。Cursor の数値は transcript と composer スナップショットからの概算で、行末が `Cursor概算` になる。Codex のトークンは `~/.codex/sessions/**/rollout-*.jsonl` の `token_usage_record` の実測で、行末が `Codex定価目安` になる。Codex Plus の実請求ではなく、Claude / Cursor の数値と混ぜて前後比較しない。振り返りには `--since YYYY-MM-DD` を使う。章ごとに subagent へ委譲した場合、subagent 側の使用量は親ログに含まれないため、この値はオーケストレータ側だけのものになる。
 
 ---
 
@@ -562,7 +562,7 @@ tr '\n' '\0' < "$TMPDIR/book_files.txt" | xargs -0 git add --
 - **`scripts/allocate-address.sh` を直接実行しない。** 採番はヘルパー外では失敗する。`wiki-page-write.py` がロック内で行う。`cd` だけの Bash も禁止(必ず `cd <vault絶対パス> && <実処理>`)。
 - **新規 source / entity / concept を `Write` ツールで作らない。** 既存なら append。衝突したらマージ復旧せず止める。
 - **シートで番号が付いた attachment を Read しない。** `individual-reads` はシートを除く画像 Read の実数。
-- **完了報告の計測に `--latest` を使わない。** `--self`(失敗時だけ `--session <ID>`)にする。
+- **完了報告の計測に `--latest` を使わない。** `--self`(Claude Code / Codex / Cursor の環境変数。失敗時だけ `--session <ID>`)にする。Cursor や Codex 経由を理由にスキップしない。
 - **章 source ページの `publish: false` を省略しない**(著作権コンテンツの外部公開防止)。
 - **書籍全体を 1 つの source ページに押し込まない**(断片入力を除く)。逆に断片入力を勝手に「全体 ingest」へ拡大しない。
 - **全ページレンダリング(`pdftoppm` 全頁)をしない**。書籍は数百ページある。

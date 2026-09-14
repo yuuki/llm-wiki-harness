@@ -297,6 +297,28 @@ title: "Book"
         self.assertEqual(e["pages"], ["Book"])
         self.assertEqual(e["sources"], ["@2020__OReilly__Book - Chapter 7"])
 
+    def test_collect_honors_vault_argument(self):
+        import importlib.util
+        other = Path(tempfile.mkdtemp()).resolve()
+        try:
+            for rel in ("wiki/concepts", "wiki/sources", "wiki/entities", "wiki/surveys"):
+                (other / rel).mkdir(parents=True)
+            os.environ["WIKI_VAULT_ROOT"] = str(other)
+            spec = importlib.util.spec_from_file_location(
+                "contradiction_index_vault", SCRIPTS / "contradiction-index.py",
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            empty = mod.collect(mod.SCAN_DIRS)
+            self.assertEqual(empty, [])
+            found = mod.collect(mod.SCAN_DIRS, vault=self.vault)
+            hosts = {r["host"] for r in found}
+            self.assertIn("wiki/concepts/TTXメトリクス.md", hosts)
+            self.assertTrue(all(not h.startswith("/") for h in hosts))
+        finally:
+            import shutil
+            shutil.rmtree(other, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

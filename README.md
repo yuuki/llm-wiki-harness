@@ -9,9 +9,9 @@
 入れる:
 
 - 媒体別 ingest（論文・書籍・博士論文・スライド・動画）と、vault 側で分岐した `wiki-ingest` / `wiki-query` / `wiki-lint`
-- `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate` / `wiki-ask-source` / `wiki-brief-source`
+- `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate` / `wiki-ask-source` / `wiki-brief-source` / `wiki-related`
 - 日本語整文（`japanese-tech-writing` と `conventions/japanese-style.md`）
-- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `wiki-clusters.py` / `concept-candidates.py` / `paper-ids.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py`）
+- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `wiki-related.py` / `wiki-clusters.py` / `concept-candidates.py` / `paper-ids.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py`）
 - 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
 - 読み取り専用の Obsidian プラグイン `wiki-lens`
 
@@ -69,7 +69,7 @@ wiki/sources ──► wiki/entities
               ├── wiki-ideate → research/ideas/（無いレイヤーなら承認後も /tmp）
               └── wiki-publish → notes/（任意）
 
-見る: wiki-lens（書かない）
+見る: wiki-lens（書かない）。開いているページの隣は `wiki-related`
 判定: wiki-gap（lens の構造候補を、知識で振り分ける）→ 薄い実在ギャップは wiki-ideate
 衛生: wiki-doctor のあと wiki-lint
 ```
@@ -86,6 +86,7 @@ wiki/sources ──► wiki/entities
 
 | 設問 | skill |
 |---|---|
+| 開いている 1 ページの隣・配役 | `wiki-related`（stdout。`retrieve.py` は使わない） |
 | 単発・1 ソース・2 対象の差分 | `wiki-query` |
 | 既読 1 source の軽い確認・深掘り | `wiki-ask-source`（`wiki/asks/`） |
 | 既読 1 source の配布用紹介文 | `wiki-brief-source`（`wiki/briefs/`。旧名 `summarize-paper-note`） |
@@ -132,7 +133,7 @@ wiki/sources ──► wiki/entities
 索引を全消しして作り直すときは `clusters.json` も消す。本ハーネスに `wiki-retrieve` skill は無い（上流）。
 
 ```bash
-rm -rf .vault-meta/chunks/ .vault-meta/bm25/ .vault-meta/embed-cache.json .vault-meta/graph.json .vault-meta/clusters.json
+rm -rf .vault-meta/chunks/ .vault-meta/bm25/ .vault-meta/embed-cache.json .vault-meta/graph.json .vault-meta/clusters.json .vault-meta/related/
 bash bin/setup-retrieve.sh
 python3 scripts/wiki-graph.py build
 python3 scripts/wiki-clusters.py build
@@ -159,7 +160,11 @@ python3 scripts/test_contradiction_index.py
 python3 scripts/test_recompile_queue.py
 python3 scripts/test_claim_audit.py
 python3 scripts/test_wiki_graph.py
+python3 scripts/test_wiki_claims.py
+python3 scripts/test_wiki_related.py
+python3 scripts/test_wiki_tokenize.py
 python3 scripts/test_wiki_clusters.py
+python3 scripts/test_usage_report.py
 python3 scripts/test_concept_candidates.py
 python3 scripts/test_paper_ids.py
 python3 scripts/test_entity_resolve.py

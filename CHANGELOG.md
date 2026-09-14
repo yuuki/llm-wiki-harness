@@ -8,6 +8,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- ページグラフ version 2。主題節の命題から出典付き辺（`claim-link` / `claim-cite`）を取り、`retrieve.py` のグラフ路候補に `via` を付ける。抽出は `wiki_claims.py`。
+- `wiki-related`。開いている 1 ページの隣を contradiction / evidence / definition / cluster の役で出す。キャッシュは `.vault-meta/related/`。スキルは stdout だけ見る。
+- 和文 BM25 の CJK 2-gram 分かち（`wiki_tokenize.py`）。索引 schema 4。古い分かちは `wiki-doctor.py` が WARN する。
+- `usage-report.py` が Cursor と Codex のセッションも集計する。
+
+### Changed
+
+- `AGENTS.md` に、正本は研究 vault・更新は研究 vault → 本リポジトリ・リリースの切り方・一般化・テーマ塊の分業を書いた。
+- `claim-audit.py` の命題抽出を `wiki_claims.py` に寄せる。
+- `contradiction-index.py` の `collect` / `list_pages` / `extract_callouts` が `vault=` を受ける（wiki-related が種の vault で読む）。
+- graph / clusters を建て直したら `.vault-meta/related/` を消す（`wiki-graph.py` / `wiki-clusters.py` / `wiki-retrieve-refresh.py`）。
+- `wiki-query` は種がページパスのとき `wiki-related` へ渡す。
+
 ## [0.4.0] - 2026-09-13
 
 スキル世界のテーマ塊を置き、ingest が concept の関連リンクを機械的に足せるようにする。

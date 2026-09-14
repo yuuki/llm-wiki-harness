@@ -123,12 +123,13 @@ def frontmatter_created(text):
     return None
 
 
-def list_pages(types):
+def list_pages(types, vault=None):
+    root = Path(vault).resolve() if vault is not None else VAULT_ROOT
     out = []
     for sub in SCAN_DIRS:
         if sub not in types:
             continue
-        folder = VAULT_ROOT / "wiki" / sub
+        folder = root / "wiki" / sub
         if not folder.is_dir():
             continue
         for name in sorted(os.listdir(folder)):
@@ -169,8 +170,9 @@ def guess_status(text):
     return "open", ""
 
 
-def extract_callouts(sub, path):
-    rel = path.resolve().relative_to(VAULT_ROOT.resolve()).as_posix()
+def extract_callouts(sub, path, vault=None):
+    root = Path(vault).resolve() if vault is not None else VAULT_ROOT
+    rel = path.resolve().relative_to(root).as_posix()
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -234,10 +236,10 @@ def extract_callouts(sub, path):
     return out
 
 
-def collect(types):
+def collect(types, vault=None):
     records = []
-    for sub, path in list_pages(types):
-        records.extend(extract_callouts(sub, path))
+    for sub, path in list_pages(types, vault=vault):
+        records.extend(extract_callouts(sub, path, vault=vault))
     records.sort(key=lambda r: (r["host"], r["line"]))
     for n, r in enumerate(records, start=1):
         r["id"] = f"x-{n:04d}"

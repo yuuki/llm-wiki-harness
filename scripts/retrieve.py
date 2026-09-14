@@ -37,7 +37,8 @@ Output schema (JSON to stdout):
       "rerank_source": "cosine:nomic-embed-text",
       "snippet": "... first 200 chars of the chunk ...",
       "graph_score": 0.31,              # only on candidates the graph channel touched
-      "channels": ["graph"]             # only on candidates the graph channel added
+      "channels": ["graph"],            # only on candidates the graph channel added
+      "via": [{"from", "to", "kind?", "sources", "loc?", "hops"}]  # added or boosted; omitted on v1 graphs
     },
     ...
   ]
@@ -119,13 +120,12 @@ def chunk_snippet(chunk_data, max_chars=200):
 SKIP_SUBTYPES = frozenset({"person", "organization"})
 
 
-def graph_channel(graph_mod, graph, candidates, seeds_n, hops, top, address_of, skip_subtypes=SKIP_SUBTYPES):
-    """BM25 上位ページを種に近傍ページを取り、(追加候補, 既存候補への加点) を返す。
+def graph_channel(graph_mod, graph, candidates, seeds_n, hops, top, address_of,
+                  skip_subtypes=SKIP_SUBTYPES, bm25_mod=None, index=None, query_text=""):
+    """BM25 上位ページを種に近傍ページを取り、(追加候補, 既存候補への加点, via) を返す。
 
-    追加候補はそのページの chunk-000(冒頭 = 定義・要約)を代表にする。語彙が合わない
-    ページは BM25 では出ないが、隣接していれば rerank が意味で判定できる位置まで運ぶ。
-    著者・所属(entity_type person / organization)は source ページの隣にいつも居るが
-    主題の問いには答えないので、既定では追加候補にしない(--graph-people で含める)。
+    追加候補は同一ページ内で問いとの BM25 が最大のチャンクを代表にする。点が無ければ
+    chunk-000。著者・所属は既定では追加候補にしない(--graph-people で含める)。
     """
     seed_pages = []
     for c in candidates:
@@ -135,12 +135,14 @@ def graph_channel(graph_mod, graph, candidates, seeds_n, hops, top, address_of, 
         if len(seed_pages) >= seeds_n:
             break
     if not seed_pages:
-        return [], {}
+        return [], {}, {}
     seeds = [(p, 1.0 / (i + 1)) for i, p in enumerate(seed_pages)]
     bm25_pages = {c.get("page_path") for c in candidates}
     neighbours = graph_mod.expand(graph, seeds, hops=hops, top=top + len(bm25_pages))
-    added, boosted = [], {}
-    for page, score in neighbours:
+    added, boosted, via_by_page = [], {}, {}
+    attach_via = isinstance(graph.get("edge_meta"), dict)
+    for page, score, via in neighbours:
+        via_by_page[page] = via if attach_via else []
         if page in bm25_pages:
             boosted[page] = score
             continue
@@ -151,27 +153,41 @@ def graph_channel(graph_mod, graph, candidates, seeds_n, hops, top, address_of, 
         addr = address_of(page)
         if not addr:
             continue
-        chunk_rel = Path(".vault-meta") / "chunks" / addr / "chunk-000.json"
-        chunk_path = VAULT_ROOT / chunk_rel
+        picked = None
+        if bm25_mod is not None:
+            picked = bm25_mod.best_chunk(query_text, addr, index=index)
+        if picked:
+            chunk_rel = Path(picked["path"])
+            chunk_path = VAULT_ROOT / chunk_rel
+            chunk_id = picked["chunk_id"]
+            chunk_index = int(chunk_id.rsplit(":", 1)[-1]) if ":" in chunk_id else 0
+        else:
+            chunk_rel = Path(".vault-meta") / "chunks" / addr / "chunk-000.json"
+            chunk_path = VAULT_ROOT / chunk_rel
+            chunk_id = f"{addr}:0"
+            chunk_index = 0
         if not chunk_path.is_file():
             continue
         try:
             chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        added.append({
-            "chunk_id": f"{addr}:0",
+        rec = {
+            "chunk_id": chunk.get("chunk_id", chunk_id),
             "page_address": chunk.get("page_address", addr),
             "page_path": page,
             "absolute_path": str((VAULT_ROOT / page).resolve()),
-            "chunk_index": chunk.get("chunk_index", 0),
+            "chunk_index": chunk.get("chunk_index", chunk_index),
             "bm25_score": 0.0,
             "graph_score": round(score, 4),
             "channels": ["graph"],
             "path": chunk_rel.as_posix(),
             "snippet": chunk_snippet(chunk),
-        })
-    return added, boosted
+        }
+        if attach_via and via:
+            rec["via"] = via
+        added.append(rec)
+    return added, boosted, via_by_page
 
 
 def rrf_fuse(candidates, added, boosted):
@@ -238,8 +254,9 @@ def main():
 
     bm25 = import_sibling("bm25_index", "bm25-index.py")
     reranker = import_sibling("rerank", "rerank.py")
+    bm25_index = bm25.load_index()
 
-    bm25_hits = bm25.query(args.query, top_k=args.bm25_top)
+    bm25_hits = bm25.query(args.query, top_k=args.bm25_top, index=bm25_index)
     log(f"bm25: {len(bm25_hits)} hits")
 
     candidates = []
@@ -276,15 +293,23 @@ def main():
                 except (ValueError, AttributeError):
                     return None
 
-            added, boosted = graph_channel(
+            added, boosted, via_by_page = graph_channel(
                 graph_mod, graph, candidates, args.graph_seeds, args.graph_hops, args.graph_top, address_of,
                 skip_subtypes=frozenset() if args.graph_people else SKIP_SUBTYPES,
+                bm25_mod=bm25, index=bm25_index, query_text=args.query,
             )
+            for c in candidates:
+                page = c.get("page_path")
+                if page in boosted and via_by_page.get(page):
+                    c["via"] = via_by_page[page]
+            via_count = sum(len(c.get("via") or []) for c in added)
+            via_count += sum(len(c.get("via") or []) for c in candidates if c.get("page_path") in boosted)
             graph_info = {
                 "active": True,
                 "seeds": min(args.graph_seeds, len({c["page_path"] for c in candidates})),
                 "added": [c["page_path"] for c in added],
                 "boosted": sorted(boosted, key=lambda p: -boosted[p]),
+                "via_count": via_count,
             }
             if added or boosted:
                 candidates = rrf_fuse(candidates, added, boosted)

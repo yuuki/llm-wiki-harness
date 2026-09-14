@@ -241,7 +241,7 @@ conventions §8 のとおり(本文は主題別の節で再編纂が書く。ing
 - commit 前に `wiki-retrieve-refresh.py --pages <作成・更新パス> ... --no-llm` を必ず実行する。
 - commit メッセージ: `wiki: ingest-thesis | <題名>`。
 
-コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**(`wiki/log.md` には書かない。log エントリはセッション終了前に書かれるため数値が確定しない)。`--latest` は並行 ingest で他人を拾うので使わない。環境変数が空なら `--session <このセッションの ID>`。振り返りには `--since YYYY-MM-DD` を使う。章ごとに subagent へ委譲した場合、subagent 側の使用量は親ログに含まれないため、この値はオーケストレータ側だけのものになる。
+コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**(`wiki/log.md` には書かない。log エントリはセッション終了前に書かれるため数値が確定しない)。`--self` は `CLAUDE_CODE_SESSION_ID`(Claude Code)、`CODEX_THREAD_ID`(Codex。無ければ `CODEX_SESSION_ID`)、`CURSOR_CONVERSATION_ID`(Cursor)をこの順で見る。環境変数が空なら `--session <このセッションの ID>`。Cursor / Codex 経由でも `--latest` には落とさない。Cursor の数値は transcript と composer スナップショットからの概算で、行末が `Cursor概算` になる。Codex のトークンは `~/.codex/sessions/**/rollout-*.jsonl` の `token_usage_record` の実測で、行末が `Codex定価目安` になる。Codex Plus の実請求ではなく、Claude / Cursor の数値と混ぜて前後比較しない。振り返りには `--since YYYY-MM-DD` を使う。章ごとに subagent へ委譲した場合、subagent 側の使用量は親ログに含まれないため、この値はオーケストレータ側だけのものになる。
 
 ---
 
@@ -253,7 +253,7 @@ conventions §8 のとおり(本文は主題別の節で再編纂が書く。ing
 - **新規 source / entity / concept を `Write` ツールで作らない。** 既存なら append。衝突したらマージ復旧せず止める。
 - **シートで番号が付いた attachment を Read しない。** `individual-reads` はシートを除く画像 Read の実数。
 - **`wiki-ingest-paper` セッションの続きで本スキルを完走しない。** 新セッションで始める。
-- **完了報告の計測に `--latest` を使わない。** `--self`(失敗時だけ `--session <ID>`)にする。
+- **完了報告の計測に `--latest` を使わない。** `--self`(Claude Code / Codex / Cursor の環境変数。失敗時だけ `--session <ID>`)にする。Cursor や Codex 経由を理由にスキップしない。
 - **30 ページ未満のサーベイ・通常論文を勝手に章分割しない**(`wiki-ingest-paper` の領分)。逆に博士論文を 1 source ページに押し込まない。
 - **サーベイの引用文献を機械的に entity 化しない**。節を割いて論じられる代表物のみ。
 - **読み手と書き手を同一 subagent で回さない**(3 章以上)。別起動する。**1〜2 章は 1 体可**。extract を `.raw` に置かない。読み手に wiki を書かせない。書き手起動前に `python3 scripts/wiki-extract-check.py --forbid-raw extracts/*.md` を 1 回かける。`QUOTE-HEAVY` でも書き手を起動しない。

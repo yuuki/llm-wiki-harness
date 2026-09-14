@@ -14,6 +14,7 @@ hot 窓の超過、一時ファイルの残骸。本スクリプトはそれら�
 
 検査(名前):
   retrieve_provisioned  BM25 索引と chunks がある
+  bm25_schema           索引の分かちが現行(和文 2-gram)か
   bm25_freshness        索引の updated_at より新しい wiki ページの数
   stale_chunks          page_path が存在しない chunk(ページの移動・削除の残骸)
   unchunked_pages       chunk が無い wiki ページ(新規・未 refresh)
@@ -43,6 +44,11 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from wiki_tokenize import INDEX_SCHEMA_VERSION, TOKENIZE_ID
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 META = VAULT_ROOT / ".vault-meta"
@@ -121,6 +127,30 @@ def check_retrieve_provisioned(r, ctx):
         r.warn("retrieve_provisioned", "BM25 索引か chunks が無い(retrieve.py は終了 10 を返す)",
                "bash bin/setup-retrieve.sh && python3 scripts/wiki-retrieve-refresh.py")
         ctx["provisioned"] = False
+
+
+BM25_SCHEMA_MIN = INDEX_SCHEMA_VERSION
+BM25_TOKENIZE_ID = TOKENIZE_ID
+
+
+def check_bm25_schema(r, ctx):
+    idx = META / "bm25" / "index.json"
+    if not idx.is_file():
+        return
+    try:
+        head = idx.read_text(encoding="utf-8")[:800]
+    except OSError:
+        return
+    m = re.search(r'"schema_version":\s*(\d+)', head)
+    ver = int(m.group(1)) if m else 1
+    tok = re.search(r'"tokenize":\s*"([^"]+)"', head)
+    tok_id = tok.group(1) if tok else None
+    if ver < BM25_SCHEMA_MIN or tok_id != BM25_TOKENIZE_ID:
+        r.warn("bm25_schema",
+               f"BM25 索引の分かちが古い(schema_version {ver}, tokenize {tok_id})",
+               "python3 scripts/bm25-index.py build")
+    else:
+        r.ok("bm25_schema", f"schema_version {ver}, {tok_id}")
 
 
 def check_bm25_freshness(r, ctx):
@@ -412,6 +442,7 @@ def check_git_dirty_wiki(r, ctx):
 
 CHECKS = [
     ("retrieve_provisioned", check_retrieve_provisioned),
+    ("bm25_schema", check_bm25_schema),
     ("bm25_freshness", check_bm25_freshness),
     ("stale_chunks", check_stale_chunks),
     ("unchunked_pages", check_unchunked_pages),

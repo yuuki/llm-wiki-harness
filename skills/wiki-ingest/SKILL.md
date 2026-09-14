@@ -419,7 +419,7 @@ Keep wiki pages short (100–300 lines). Split or child-out when a page grows be
 
 ### 計測
 
-コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**。`wiki/log.md` には書かない(log エントリはセッション終了前に書かれるため、そこへ載せた数値は確定値にならない)。`--latest` は並行 ingest で他人のセッションを拾うので使わない。環境変数が空なら `--session <このセッションの ID>`。
+コミット後に `python3 scripts/usage-report.py --self --log-line` を実行し、出力の 1 行を**チャットの完了報告に含める**。`wiki/log.md` には書かない(log エントリはセッション終了前に書かれるため、そこへ載せた数値は確定値にならない)。`--self` は `CLAUDE_CODE_SESSION_ID`(Claude Code)、`CODEX_THREAD_ID`(Codex。無ければ `CODEX_SESSION_ID`)、`CURSOR_CONVERSATION_ID`(Cursor)をこの順で見る。どれも空なら `--session <このセッションの ID>`。Cursor / Codex 経由でも `--latest` には落とさない。Cursor の数値は transcript と composer スナップショットからの概算で、行末が `Cursor概算` になる。Codex のトークンは `~/.codex/sessions/**/rollout-*.jsonl` の `token_usage_record` の実測で、行末が `Codex定価目安` になる。Codex Plus の実請求ではなく、Claude / Cursor の数値と混ぜて前後比較しない。
 
 - 複数 ingest をまたぐ振り返りと改善の前後比較には `python3 scripts/usage-report.py --since YYYY-MM-DD` を使う。
 - subagent(Task / Agent)の使用量は親セッションのログに含まれない。並列 ingest ではこの数値はオーケストレータ側だけの値になる。

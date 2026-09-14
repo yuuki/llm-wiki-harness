@@ -10,6 +10,8 @@ The wiki has already done the synthesis work. Read strategically, answer precise
 
 単一 source の配布用紹介文(Slack に貼る箇条書き、「この論文を要約して」で共有したいとき)は `wiki-brief-source` に渡し、本 skill では答えない。`wiki/questions/` にも保存しない。
 
+今見ているページの隣・関連・配役は `wiki-related` に渡す。種が問い文なら本 skill、種がページパスなら `wiki-related` である。`retrieve.py` で隣を作るな。
+
 ---
 
 ## Transport (v1.7+)

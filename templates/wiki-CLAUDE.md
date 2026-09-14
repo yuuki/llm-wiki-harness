@@ -9,7 +9,7 @@
   - `sources/` / `entities/` / `concepts/` / `questions/` / `asks/` / `briefs/` / `surveys/` / `meta/`
   - `index.md` カタログ / `hot.md` 直近窓 / `log.md` 操作履歴 / `overview.md`
 - `.vault-meta/` — `mode.json` / `transport.json` / lock / address カウンタ
-- `scripts/` — カタログ・解決・抜粋・retrieve・原本取得に加え、矛盾索引・再編纂キュー・命題再検証・ページグラフ・テーマ塊（`wiki-clusters.py` の `lookup` / `members` だけをスキルから呼ぶ。`.vault-meta/clusters.json` は Read しない）・concept 候補台帳・論文 ID・entity 名寄せ・関心要約・コンテキスト束・機械状態検査
+- `scripts/` — カタログ・解決・抜粋・retrieve・原本取得に加え、矛盾索引・再編纂キュー・命題再検証・ページグラフ（`graph.json` version 2。辺に `via`）・テーマ塊（`wiki-clusters.py` の `lookup` / `members` だけをスキルから呼ぶ。`.vault-meta/clusters.json` は Read しない）・配役つき近傍（`wiki-related.py`。stdout だけ見る。`.vault-meta/related/` を Read するな）・concept 候補台帳・論文 ID・entity 名寄せ・関心要約・コンテキスト束・機械状態検査
 
 既存の一次ノート（`papers/` や `notes/` など）がある vault では、それらを ingest で書き換えない。wiki からは一方向参照だけにする。MOC への逆リンクは人間が承認したときだけ 1 件単位。
 
@@ -34,6 +34,7 @@
 | スライド | `wiki-ingest-slides` | `.raw/slides/<slug>/` + wiki |
 | 動画 | `wiki-ingest-video` | 文字起こしを補助に wiki 化 |
 | 記事など一般ソース | `wiki-ingest` | `.raw/articles/` + wiki |
+| 今見ているページの隣（配役つき近傍） | `wiki-related` | stdout のみ。`.vault-meta/related/` は Read しない。問い検索は `wiki-query` |
 | 単発の問い・1 ソースの解説・2 対象の差分 | `wiki-query` | 回答 + 標準では `wiki/questions/`（save-first） |
 | 既読 1 source への軽い確認・深掘り | `wiki-ask-source` | `wiki/asks/`（1 source = 1 ノート。conventions §14） |
 | 既読 1 source の配布用紹介文（Slack 等） | `wiki-brief-source` | `wiki/briefs/`（1 source = 1 ノート。conventions §15）。旧名 `summarize-paper-note` |
@@ -45,7 +46,7 @@
 | 構造的間隙の判定 | `wiki-gap` | `wiki/meta/gap-report-*.md` |
 | 概念の再編纂 | `wiki-refactor` | 対象の concept ページ |
 
-母集団が薄いときの `wiki-survey` は `wiki-ingest-*` または上流の `autoresearch` へ差し戻す。命題に触れる source が 2 本未満の `wiki-thesis` も同じ差し戻し（`insufficient`）。どちらも `wiki-query` へは戻さない。既読 1 source の軽い確認は `wiki-ask-source`、Slack 等へ貼る紹介文は `wiki-brief-source`。どちらも知識の一次ソースではない。
+母集団が薄いときの `wiki-survey` は `wiki-ingest-*` または上流の `autoresearch` へ差し戻す。命題に触れる source が 2 本未満の `wiki-thesis` も同じ差し戻し（`insufficient`）。どちらも `wiki-query` へは戻さない。開いている 1 ページの隣は `wiki-related`。既読 1 source の軽い確認は `wiki-ask-source`、Slack 等へ貼る紹介文は `wiki-brief-source`。ask / brief は知識の一次ソースではない。
 
 ## 概念ページ
 

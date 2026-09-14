@@ -135,7 +135,7 @@ thesis ページの判定は「命題が真か」ではなく「wiki のソー�
 - wiki ページから既存 `papers/`・`research/`・`structures/*.MOC.md` へは `[[...]]` で**一方向参照**してよい。
 - **既存ファイル(papers/・research/・structures/・notes/)は wiki-ingest で書き換えない**。MOC への逆リンク追記は**人間が承認したときのみ** 1 件単位で行う。
 - concept ページは関連する `structures/*.MOC.md` を参照し、発見性を担保する。役割の違い: MOC=人間がキュレートする読み筋、concept=LLM が新規ソースから積み上げる定義・関係の集約(重複は許容)。
-- wiki ページの一望は種別ごとの Obsidian の Base である。[[concepts.base]] / [[sources.base]] / [[entities.base]]。各フォルダに `type` が揃ったページがあればライブで現れる。ingest はこれらの Base を更新しない。各 `_index.md` のカタログは取り込み履歴用であり、地図ではない。
+- wiki ページの一望は種別ごとの Obsidian の Base である。[[concepts.base]] / [[sources.base]] / [[entities.base]] / [[asks.base]] / [[briefs.base]]。各フォルダに `type` が揃ったページがあればライブで現れる。ingest はこれらの Base を更新しない。各 `_index.md` のカタログは取り込み履歴用であり、地図ではない。Base ファイル自体は vault 側の任意である。
 
 ## 7. ページ構成・分量
 
@@ -231,8 +231,9 @@ concept ページは、複数ソースを横断した知識を compile した**�
 - 既存ページの有無: `python3 scripts/wiki-resolve.py`
 - 本文: `python3 scripts/wiki-excerpt.py`
 - 索引・ホット・ログの更新: `python3 scripts/wiki-catalog.py`(ファイルを Read して Edit しない)
-- query の第一経路: `python3 scripts/retrieve.py`(ページグラフがあれば第 3 路。`wiki-graph.py`)
-- ingest 後: `python3 scripts/wiki-retrieve-refresh.py --pages ... --no-llm`(BM25 と `graph.json` / `clusters.json` を差分更新。テーマ塊は `wiki-clusters.py lookup` / `members` だけ。JSON は Read しない)
+- query の第一経路: `python3 scripts/retrieve.py`(ページグラフがあれば第 3 路。`wiki-graph.py`。version 2 なら候補に `via`)
+- 開いているページの隣: `python3 scripts/wiki-related.py "<vault相対パス>"`(stdout だけ。`.vault-meta/related/` は Read しない)
+- ingest 後: `python3 scripts/wiki-retrieve-refresh.py --pages ... --no-llm`(BM25 と `graph.json` / `clusters.json` を差分更新。graph / clusters を建て直したら `.vault-meta/related/` は消える。テーマ塊は `wiki-clusters.py lookup` / `members` だけ。JSON は Read しない)
 - 関心の要約: `python3 scripts/wiki-profile.py`(無い vault では終了 3。判定を飛ばす)
 - 束: `python3 scripts/wiki-context-pack.py`(subagent への引き継ぎ)
 - 機械状態: `python3 scripts/wiki-doctor.py`(lint の最初)

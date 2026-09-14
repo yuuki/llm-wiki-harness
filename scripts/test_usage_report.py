@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -131,12 +132,12 @@ def basic_session_rows():
 def tool_session_rows():
     """Read の細分カテゴリと tool_result の分量を確かめるためのセッション。"""
     reads = [
-        ("r-image", "/Users/x/obsidian/research/wiki/sources/_attachments/a/fig.PNG"),
-        ("r-raw", "/Users/x/obsidian/research/.raw/papers/arxiv-1.txt"),
-        ("r-meta", "/Users/x/obsidian/research/wiki/meta/conventions.md"),
+        ("r-image", "/vault/wiki/sources/_attachments/a/fig.PNG"),
+        ("r-raw", "/vault/.raw/papers/arxiv-1.txt"),
+        ("r-meta", "/vault/wiki/meta/conventions.md"),
         ("r-skill", "/Users/x/.claude/skills/wiki-ingest/SKILL.md"),
-        ("r-page", "/Users/x/obsidian/research/wiki/concepts/foo.md"),
-        ("r-other", "/Users/x/obsidian/research/README.txt"),
+        ("r-page", "/vault/wiki/concepts/foo.md"),
+        ("r-other", "/vault/README.txt"),
     ]
     blocks = [
         {"type": "tool_use", "id": use_id, "name": "Read", "input": {"file_path": path}}
@@ -188,6 +189,12 @@ def run_script(argv, env_overrides=None, cwd=None):
     # 実セッションの中でテストを回しても --self が宿主を拾わないようにする。
     env.pop("CLAUDE_CODE_SESSION_ID", None)
     env.pop("CLAUDE_SESSION_ID", None)
+    env.pop("CURSOR_CONVERSATION_ID", None)
+    env.pop("AGENT_TRANSCRIPTS", None)
+    env.pop("CURSOR_STATE_DB", None)
+    env.pop("CODEX_THREAD_ID", None)
+    env.pop("CODEX_SESSION_ID", None)
+    env.pop("CODEX_HOME", None)
     if env_overrides:
         env.update(env_overrides)
     proc = subprocess.run(
@@ -751,6 +758,36 @@ class CliTest(TempProject):
             usage_report.current_session_id({"CLAUDE_SESSION_ID": "old"}),
             "old",
         )
+        self.assertEqual(
+            usage_report.current_session_id({"CURSOR_CONVERSATION_ID": "cursor-id"}),
+            "cursor-id",
+        )
+        self.assertEqual(
+            usage_report.current_session_id({"CODEX_THREAD_ID": "codex-id"}),
+            "codex-id",
+        )
+        self.assertEqual(
+            usage_report.current_session_id({"CODEX_SESSION_ID": "codex-legacy"}),
+            "codex-legacy",
+        )
+        self.assertEqual(
+            usage_report.current_session_id(
+                {
+                    "CLAUDE_CODE_SESSION_ID": "claude-id",
+                    "CURSOR_CONVERSATION_ID": "cursor-id",
+                }
+            ),
+            "claude-id",
+        )
+        self.assertEqual(
+            usage_report.current_session_id(
+                {
+                    "CODEX_THREAD_ID": "codex-id",
+                    "CURSOR_CONVERSATION_ID": "cursor-id",
+                }
+            ),
+            "codex-id",
+        )
 
     def test_log_line_format(self):
         code, out = run_cli(self.base_argv() + ["--session", "eeee1111", "--log-line"])
@@ -1196,6 +1233,562 @@ class RobustnessTest(TempProject):
         ]
         path = write_session(self.project_dir, "9999ffff-other", rows)
         self.assertEqual(analyze(path)["api_calls"], 0)
+
+
+# --------------------------------------------------------------------------
+# 7. Cursor transcript と --self
+# --------------------------------------------------------------------------
+
+
+def cursor_user_row(text):
+    return {
+        "role": "user",
+        "message": {"content": [{"type": "text", "text": text}]},
+    }
+
+
+def cursor_assistant_row(text=None, tools=None, thinking=None):
+    content = []
+    if thinking:
+        content.append({"type": "thinking", "thinking": thinking})
+    if text:
+        content.append({"type": "text", "text": text})
+    for name, path in tools or ():
+        content.append(
+            {
+                "type": "tool_use",
+                "id": "t-%s" % name,
+                "name": name,
+                "input": {"file_path": path} if path else {},
+            }
+        )
+    return {"role": "assistant", "message": {"content": content}}
+
+
+def write_cursor_session(transcripts_dir, session_id, rows):
+    folder = Path(transcripts_dir) / session_id
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / ("%s.jsonl" % session_id)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return path
+
+
+def write_composer_db(
+    path,
+    session_id,
+    model="grok-4.6",
+    context=10000,
+    conversation=7000,
+    headers=None,
+    bubbles=None,
+):
+    payload = {
+        "modelConfig": {"modelName": model},
+        "contextTokensUsed": context,
+        "promptTokenBreakdown": {
+            "totalUsedTokens": context,
+            "categories": [
+                {"id": "system_prompt", "estimatedTokens": context - conversation},
+                {"id": "conversation", "estimatedTokens": conversation},
+            ],
+        },
+        "createdAt": 1789000000000,
+        "lastUpdatedAt": 1789000030000,
+        "fullConversationHeadersOnly": headers or [],
+    }
+    con = sqlite3.connect(path)
+    try:
+        con.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT)")
+        con.execute(
+            "INSERT INTO cursorDiskKV(key, value) VALUES (?, ?)",
+            ("composerData:%s" % session_id, json.dumps(payload, ensure_ascii=False)),
+        )
+        for bubble_id, bubble in (bubbles or {}).items():
+            con.execute(
+                "INSERT INTO cursorDiskKV(key, value) VALUES (?, ?)",
+                (
+                    "bubbleId:%s:%s" % (session_id, bubble_id),
+                    json.dumps(bubble, ensure_ascii=False),
+                ),
+            )
+        con.commit()
+    finally:
+        con.close()
+    return path
+
+
+class CursorSessionTest(TempProject):
+    def setUp(self):
+        super().setUp()
+        self.session_id = "cccc1111-2222-3333-4444-555566667777"
+        self.transcripts = self.root / "agent-transcripts"
+        self.rows = [
+            cursor_user_row("<user_query>\nwiki-ingest-paper https://arxiv.org/abs/1503.03578\n</user_query>"),
+            cursor_assistant_row("hello", tools=(("Read", "/vault/wiki/concepts/foo.md"),)),
+            cursor_assistant_row("done", tools=(("Task", None),)),
+        ]
+        self.path = write_cursor_session(self.transcripts, self.session_id, self.rows)
+        self.state_db = self.root / "state.vscdb"
+        write_composer_db(self.state_db, self.session_id, context=9000, conversation=6000)
+
+    def cursor_argv(self):
+        return [
+            "--project-dir",
+            str(self.project_dir),
+            "--cursor-transcripts",
+            str(self.transcripts),
+            "--cursor-state-db",
+            str(self.state_db),
+        ]
+
+    def test_estimate_tokens_counts_cjk_and_ascii(self):
+        self.assertEqual(usage_report.estimate_tokens(""), 0)
+        self.assertEqual(usage_report.estimate_tokens("abcd"), 1)
+        self.assertEqual(usage_report.estimate_tokens("あいう"), 3)
+        self.assertGreater(usage_report.estimate_tokens("hello 世界"), 2)
+
+    def test_analyze_cursor_transcript_without_composer(self):
+        metrics = analyze(self.path)
+        self.assertTrue(metrics["usage_estimated"])
+        self.assertEqual(metrics["usage_basis"], "cursor-estimate")
+        self.assertEqual(metrics["api_calls"], 2)
+        self.assertEqual(metrics["tools"].get("Read:wiki-page"), 1)
+        self.assertEqual(metrics["subagents"], 1)
+        self.assertGreater(metrics["output"], 0)
+        self.assertGreater(metrics["context"]["last"], 0)
+        self.assertEqual(metrics["command"], "wiki-ingest-paper https://arxiv.org/abs/1503.03578")
+
+    def test_composer_scales_final_context(self):
+        meta = usage_report.load_cursor_composer_meta(self.session_id, self.state_db)
+        self.assertEqual(meta["model"], "grok-4.6")
+        self.assertEqual(meta["context_tokens_used"], 9000)
+        self.assertEqual(meta["conversation_tokens"], 6000)
+        self.assertEqual(meta["overhead_tokens"], 3000)
+        metrics = usage_report.attach_cost(
+            usage_report.analyze_session(self.path, cursor_meta=meta),
+            usage_report.load_pricing(None)[0],
+        )
+        self.assertEqual(metrics["context"]["last"], 9000)
+        self.assertEqual(metrics["models"], ["grok-4.6"])
+        self.assertTrue(metrics["cost"]["pricing_label"].startswith("grok"))
+        self.assertIn("?", metrics["cost"]["pricing_label"])
+
+    def test_self_reads_cursor_conversation_id(self):
+        newer = write_session(self.project_dir, "ffff9999-newer-session", basic_session_rows())
+        newer_mtime = self.path.stat().st_mtime + 10
+        os.utime(newer, (newer_mtime, newer_mtime))
+        code, out, err = run_script(
+            self.cursor_argv() + ["--self", "--log-line"],
+            env_overrides={"CURSOR_CONVERSATION_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("calls=2", out)
+        self.assertIn("Cursor概算", out)
+        self.assertNotIn("calls=3", out)
+
+    def test_self_prefers_claude_env_over_cursor_env(self):
+        claude_id = "eeee1111-2222-3333-4444-555566667777"
+        write_session(self.project_dir, claude_id, basic_session_rows())
+        code, out, err = run_script(
+            self.cursor_argv() + ["--self", "--log-line"],
+            env_overrides={
+                "CLAUDE_CODE_SESSION_ID": claude_id,
+                "CURSOR_CONVERSATION_ID": self.session_id,
+            },
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("calls=3", out)
+        self.assertIn("定価目安", out)
+        self.assertNotIn("Cursor概算", out)
+
+    def test_log_line_without_mode_uses_cursor_env(self):
+        code, out, err = run_script(
+            self.cursor_argv() + ["--log-line"],
+            env_overrides={"CURSOR_CONVERSATION_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("Cursor概算", out)
+
+    def test_session_id_finds_nested_cursor_transcript(self):
+        code, out = run_cli(self.cursor_argv() + ["--session", self.session_id, "--log-line"])
+        self.assertEqual(code, usage_report.EXIT_OK)
+        self.assertIn("calls=2", out)
+
+    def test_empty_transcript_falls_back_to_composer_bubbles(self):
+        session_id = "bbbb1111-2222-3333-4444-555566667777"
+        transcripts = self.root / "bubbles-transcripts"
+        path = write_cursor_session(
+            transcripts,
+            session_id,
+            [cursor_user_row("<user_query>\nonly the prompt so far\n</user_query>")],
+        )
+        state_db = self.root / "bubbles.vscdb"
+        write_composer_db(
+            state_db,
+            session_id,
+            context=8000,
+            conversation=5000,
+            headers=[
+                {
+                    "bubbleId": "u1",
+                    "type": 1,
+                    "grouping": {"hasText": True, "textPreview": "only the prompt so far"},
+                },
+                {
+                    "bubbleId": "a1",
+                    "type": 2,
+                    "grouping": {"hasText": True, "textPreview": "working"},
+                },
+                {
+                    "bubbleId": "t1",
+                    "type": 2,
+                    "grouping": {
+                        "isToolGroupable": True,
+                        "toolCallCase": "readToolCall",
+                        "toolDisplayPath": "/vault/wiki/concepts/foo.md",
+                    },
+                },
+            ],
+            bubbles={
+                "u1": {"text": "<user_query>\nonly the prompt so far\n</user_query>", "type": 1},
+                "a1": {"text": "working", "type": 2},
+                "t1": {
+                    "type": 2,
+                    "toolFormerData": {
+                        "name": "read_file_v2",
+                        "rawArgs": json.dumps(
+                            {"path": "/vault/wiki/concepts/foo.md"}
+                        ),
+                    },
+                },
+            },
+        )
+        metrics = usage_report.attach_cost(
+            usage_report.analyze_session(
+                path,
+                cursor_meta=usage_report.load_cursor_composer_meta(session_id, state_db),
+                cursor_state_db=state_db,
+            ),
+            usage_report.load_pricing(None)[0],
+        )
+        self.assertGreaterEqual(metrics["api_calls"], 1)
+        self.assertEqual(metrics["tools"].get("Read:wiki-page"), 1)
+        self.assertEqual(metrics["context"]["last"], 8000)
+        self.assertTrue(metrics["usage_estimated"])
+
+        code, out, err = run_script(
+            [
+                "--project-dir",
+                str(self.project_dir),
+                "--cursor-transcripts",
+                str(transcripts),
+                "--cursor-state-db",
+                str(state_db),
+                "--self",
+                "--log-line",
+            ],
+            env_overrides={"CURSOR_CONVERSATION_ID": session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("Cursor概算", out)
+        self.assertNotIn("calls=0", out)
+
+    def test_missing_cursor_transcripts_dir_is_reported(self):
+        code, _out, err = run_script(
+            [
+                "--project-dir",
+                str(self.project_dir),
+                "--cursor-transcripts",
+                str(self.root / "missing"),
+                "--self",
+            ],
+            env_overrides={"CURSOR_CONVERSATION_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_MISSING)
+        self.assertIn("--cursor-transcripts", err)
+
+
+def write_codex_session(
+    sessions_dir,
+    session_id,
+    cwd,
+    model="gpt-5.6-luna",
+    user_text="$wiki-ingest-paper https://arxiv.org/abs/1503.03578",
+    usages=None,
+    tools=None,
+    stamp="2026-09-13T02-00-00",
+):
+    """最小の Codex rollout を書く。"""
+    sessions_dir = Path(sessions_dir)
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    path = sessions_dir / ("rollout-%s-%s.jsonl" % (stamp, session_id))
+    if usages is None:
+        usages = [
+            {
+                "input_tokens": 10000,
+                "cached_input_tokens": 4000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 100,
+                "reasoning_output_tokens": 40,
+            },
+            {
+                "input_tokens": 12000,
+                "cached_input_tokens": 8000,
+                "cache_write_input_tokens": 100,
+                "output_tokens": 200,
+                "reasoning_output_tokens": 50,
+            },
+        ]
+    if tools is None:
+        tools = [
+            ("exec", {"command": "sed -n '1,20p' wiki/concepts/foo.md"}),
+            ("wait", {"yield_time_ms": 1000}),
+        ]
+    rows = [
+        {
+            "timestamp": "2026-09-13T02:00:00.000Z",
+            "ordinal": 0,
+            "type": "session_meta",
+            "payload": {"session_id": session_id, "id": session_id, "cwd": cwd},
+        },
+        {
+            "timestamp": "2026-09-13T02:00:00.100Z",
+            "ordinal": 1,
+            "type": "world_state",
+            "payload": {"state": {"collaboration_mode": {"model": model}}},
+        },
+        {
+            "timestamp": "2026-09-13T02:00:00.200Z",
+            "ordinal": 2,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "# AGENTS.md instructions\n<INSTRUCTIONS>x</INSTRUCTIONS>"}],
+            },
+        },
+        {
+            "timestamp": "2026-09-13T02:00:00.300Z",
+            "ordinal": 3,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": user_text}],
+            },
+        },
+    ]
+    ordinal = 4
+    for index, (name, payload) in enumerate(tools):
+        call_id = "call-%d" % index
+        rows.append(
+            {
+                "timestamp": "2026-09-13T02:00:01.%03dZ" % index,
+                "ordinal": ordinal,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "id": "ctc-%d" % index,
+                    "call_id": call_id,
+                    "name": name,
+                    "input": json.dumps(payload),
+                },
+            }
+        )
+        ordinal += 1
+        rows.append(
+            {
+                "timestamp": "2026-09-13T02:00:01.%03dZ" % (index + 50),
+                "ordinal": ordinal,
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": call_id,
+                    "output": [{"type": "input_text", "text": "ok-%d" % index}],
+                },
+            }
+        )
+        ordinal += 1
+    for index, usage in enumerate(usages):
+        rows.append(
+            {
+                "timestamp": "2026-09-13T02:00:02.%03dZ" % index,
+                "ordinal": ordinal,
+                "type": "token_usage_record",
+                "payload": {
+                    "thread_id": session_id,
+                    "session_id": session_id,
+                    "response_id": "resp-%d" % index,
+                    "usage": usage,
+                },
+            }
+        )
+        ordinal += 1
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return path
+
+
+class CodexSessionTest(TempProject):
+    def setUp(self):
+        super().setUp()
+        self.session_id = "01a096a3-9de9-7392-b77c-13e6cbfac237"
+        self.sessions = self.root / "codex-sessions"
+        self.path = write_codex_session(self.sessions, self.session_id, cwd=str(self.root))
+
+    def codex_argv(self):
+        return [
+            "--project-dir",
+            str(self.project_dir),
+            "--codex-sessions",
+            str(self.sessions),
+        ]
+
+    def test_map_codex_usage_splits_cached_input(self):
+        usage = usage_report.map_codex_usage(
+            {
+                "input_tokens": 12000,
+                "cached_input_tokens": 8000,
+                "cache_write_input_tokens": 100,
+                "output_tokens": 200,
+                "reasoning_output_tokens": 50,
+            }
+        )
+        self.assertEqual(usage["input_tokens"], 3900)
+        self.assertEqual(usage["cache_creation_input_tokens"], 100)
+        self.assertEqual(usage["cache_read_input_tokens"], 8000)
+        self.assertEqual(usage["output_tokens"], 200)
+        self.assertEqual(usage["output_tokens_details"]["thinking_tokens"], 50)
+
+    def test_analyze_codex_rollout(self):
+        metrics = analyze(self.path)
+        self.assertFalse(metrics["usage_estimated"])
+        self.assertEqual(metrics["usage_basis"], "codex-log")
+        self.assertEqual(metrics["session_id"], self.session_id)
+        self.assertEqual(metrics["api_calls"], 2)
+        self.assertEqual(metrics["input"], 9900)
+        self.assertEqual(metrics["cache_create"], 100)
+        self.assertEqual(metrics["cache_read"], 12000)
+        self.assertEqual(metrics["new_in"], 10000)
+        self.assertEqual(metrics["output"], 300)
+        self.assertEqual(metrics["thinking"], 90)
+        self.assertEqual(metrics["context"]["first"], 10000)
+        self.assertEqual(metrics["context"]["last"], 12000)
+        self.assertEqual(metrics["tools"].get("Shell"), 1)
+        self.assertEqual(metrics["tools"].get("AwaitShell"), 1)
+        self.assertEqual(metrics["command"], "wiki-ingest-paper https://arxiv.org/abs/1503.03578")
+        self.assertEqual(metrics["models"], ["gpt-5.6-luna"])
+        self.assertIn("gpt", metrics["cost"]["pricing_label"])
+
+    def test_self_reads_codex_thread_id(self):
+        newer = write_session(self.project_dir, "ffff9999-newer-session", basic_session_rows())
+        newer_mtime = self.path.stat().st_mtime + 10
+        os.utime(newer, (newer_mtime, newer_mtime))
+        code, out, err = run_script(
+            self.codex_argv() + ["--self", "--log-line"],
+            env_overrides={"CODEX_THREAD_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("calls=2", out)
+        self.assertIn("Codex定価目安", out)
+        self.assertNotIn("calls=3", out)
+
+    def test_self_falls_back_to_codex_session_id(self):
+        code, out, err = run_script(
+            self.codex_argv() + ["--self", "--log-line"],
+            env_overrides={"CODEX_SESSION_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("Codex定価目安", out)
+
+    def test_self_prefers_codex_env_over_cursor_env(self):
+        cursor_id = "cccc1111-2222-3333-4444-555566667777"
+        transcripts = self.root / "agent-transcripts"
+        write_cursor_session(
+            transcripts,
+            cursor_id,
+            [
+                cursor_user_row("<user_query>\ncursor prompt\n</user_query>"),
+                cursor_assistant_row("hello"),
+            ],
+        )
+        code, out, err = run_script(
+            self.codex_argv()
+            + ["--cursor-transcripts", str(transcripts), "--self", "--log-line"],
+            env_overrides={
+                "CODEX_THREAD_ID": self.session_id,
+                "CURSOR_CONVERSATION_ID": cursor_id,
+            },
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("Codex定価目安", out)
+        self.assertNotIn("Cursor概算", out)
+
+    def test_log_line_without_mode_uses_codex_env(self):
+        code, out, err = run_script(
+            self.codex_argv() + ["--log-line"],
+            env_overrides={"CODEX_THREAD_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("Codex定価目安", out)
+
+    def test_session_id_finds_rollout_filename(self):
+        code, out = run_cli(self.codex_argv() + ["--session", self.session_id, "--log-line"])
+        self.assertEqual(code, usage_report.EXIT_OK)
+        self.assertIn("calls=2", out)
+
+    def test_same_session_id_two_rollouts_picks_newest(self):
+        older = write_codex_session(
+            self.sessions,
+            self.session_id,
+            cwd=str(self.root),
+            stamp="2026-09-12T01-00-00",
+            usages=[
+                {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 10,
+                    "reasoning_output_tokens": 0,
+                }
+            ],
+            tools=[],
+        )
+        os.utime(older, (self.path.stat().st_mtime - 50, self.path.stat().st_mtime - 50))
+        code, out, err = run_script(
+            self.codex_argv() + ["--self", "--log-line"],
+            env_overrides={"CODEX_THREAD_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_OK, err)
+        self.assertIn("calls=2", out)
+
+    def test_project_dir_isolates_host_codex_home(self):
+        code, _out, err = run_script(
+            ["--project-dir", str(self.project_dir), "--self"],
+            env_overrides={
+                "CODEX_THREAD_ID": self.session_id,
+                "CODEX_HOME": str(self.root / "unused-codex-home"),
+            },
+        )
+        self.assertEqual(code, usage_report.EXIT_MISSING)
+        self.assertIn("見つからない", err)
+
+    def test_missing_codex_sessions_dir_is_reported(self):
+        code, _out, err = run_script(
+            [
+                "--project-dir",
+                str(self.project_dir),
+                "--codex-sessions",
+                str(self.root / "missing"),
+                "--self",
+            ],
+            env_overrides={"CODEX_THREAD_ID": self.session_id},
+        )
+        self.assertEqual(code, usage_report.EXIT_MISSING)
+        self.assertIn("--codex-sessions", err)
 
 
 if __name__ == "__main__":

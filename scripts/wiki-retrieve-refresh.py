@@ -22,6 +22,7 @@ Exit codes:
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -156,6 +157,9 @@ def main(argv=None):
         if not clusters_ok:
             log(f"wiki-retrieve-refresh: wiki-clusters.py build exit {clusters.returncode} (retrieve keeps working without it)")
 
+    if should_wipe_related(graph_ok, clusters_ok):
+        wipe_related_after_rebuild(VAULT_ROOT)
+
     payload = {
         "pages": page_count,
         "chunks_written": chunks_written if have_counts else None,
@@ -166,6 +170,20 @@ def main(argv=None):
     }
     print(json.dumps(payload, ensure_ascii=False))
     return EXIT_CHILD if failed else EXIT_OK
+
+
+def should_wipe_related(graph_ok, clusters_ok):
+    return bool(graph_ok or clusters_ok)
+
+
+def wipe_related_after_rebuild(root):
+    cache_py = SCRIPT_DIR / "wiki_related_cache.py"
+    if not cache_py.is_file():
+        return
+    spec = importlib.util.spec_from_file_location("wiki_related_cache", cache_py)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.wipe_related_cache(root)
 
 
 if __name__ == "__main__":

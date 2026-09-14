@@ -11,10 +11,11 @@ Concurrency:
 
 Index schema (.vault-meta/bm25/index.json):
 {
-  "schema_version": 1,
+  "schema_version": 4,
+  "tokenize": "cjk-bigram-v3",
   "params": {"k1": 1.5, "b": 0.75},
   "doc_count": 1234,
-  "avg_dl": 487.5,
+  "avg_dl": 933.1,
   "updated_at": "2026-05-17T...",
   "vocab": {
     "<term>": {"df": 17, "postings": [["c-000001:0", 3], ["c-000042:2", 1], ...]}
@@ -26,9 +27,12 @@ Index schema (.vault-meta/bm25/index.json):
 
 Chunk id format: "<page-address>:<chunk-index>" (e.g. "c-000042:3").
 
-Tokenization: lowercase, collapse whitespace, drop punctuation except in-word
-apostrophes and hyphens. ASCII-only stopwords filtered (small list; favors
-recall over precision).
+Tokenization: NFKC + casefold. Latin (and other non-CJK \\w) words keep
+in-word apostrophes and hyphens. CJK runs become character bigrams; run
+edges are also unigrams. Adjacent digit↔CJK pairs emit a boundary bigram
+(e.g. 3台). ASCII digits are kept. ASCII stopwords filtered. Query and
+index must use the same function (`wiki_tokenize.tokenize`). Rebuild after
+upgrade (schema_version 4, tokenize cjk-bigram-v3).
 
 Query interface (used by retrieve.py at query time):
   bm25-index.py query "your text here" [--top 20]
@@ -50,11 +54,15 @@ import fcntl
 import json
 import math
 import os
-import re
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from wiki_tokenize import INDEX_SCHEMA_VERSION, TOKENIZE_ID, tokenize
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 META_DIR = VAULT_ROOT / ".vault-meta"
@@ -65,19 +73,7 @@ LOCK_PATH = META_DIR / ".bm25.lock"
 
 K1 = 1.5
 B = 0.75
-
-# Small high-frequency-stopword list (English). Conservative — keep recall high.
-STOPWORDS = frozenset("""
-a an and are as at be by for from has have he her him his i if in is it its
-of on or that the their them they this to was were will with you your
-""".split())
-
-# Unicode-aware tokenizer (v1.7.2; closes audit M2). \w under re.UNICODE
-# matches letters and digits from any script (CJK, Cyrillic, accented Latin,
-# Devanagari, etc.) plus underscore. Internal apostrophes and hyphens are
-# preserved so "user's" and "well-formed" stay single tokens. Pure-symbol or
-# pure-emoji tokens fail the leading \w anchor and are correctly skipped.
-TOKEN_RE = re.compile(r"\w[\w'\-]*", re.UNICODE)
+SCHEMA_VERSION = INDEX_SCHEMA_VERSION
 
 EXIT_OK = 0
 EXIT_LOCK = 1
@@ -88,12 +84,6 @@ EXIT_NO_CHUNKS = 4
 
 def log(msg):
     print(msg, file=sys.stderr)
-
-
-def tokenize(text):
-    """Lowercase, strip punctuation, drop stopwords. Returns a list of terms."""
-    return [t.lower() for t in TOKEN_RE.findall(text)
-            if t.lower() not in STOPWORDS and len(t) > 1]
 
 
 def acquire_lock():
@@ -165,7 +155,8 @@ def build_index():
              for term in sorted(df.keys())}
 
     return {
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
+        "tokenize": TOKENIZE_ID,
         "params": {"k1": K1, "b": B},
         "doc_count": len(docs),
         "avg_dl": avg_dl,
@@ -191,31 +182,29 @@ def load_index():
         log(f"ERR: no index at {INDEX_PATH}. Run `bm25-index.py build` first.")
         sys.exit(EXIT_INDEX_MISSING)
     try:
-        return json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+        idx = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         log(f"ERR: index corrupt: {e}")
         sys.exit(EXIT_INDEX_MISSING)
+    if (idx.get("schema_version", 1) < SCHEMA_VERSION
+            or idx.get("tokenize") != TOKENIZE_ID):
+        log("WARN: BM25 索引の分かちが古い。`python3 scripts/bm25-index.py build` を実行せよ。")
+    return idx
 
 
-def query(text, top_k=20):
-    idx = load_index()
+def _okapi_scores(idx, text, chunk_ids=None):
+    """Okapi BM25 scores. chunk_ids が与えられたらその集合だけを足す。"""
     vocab = idx["vocab"]
     docs = idx["docs"]
     params = idx["params"]
-    avg_dl = idx["avg_dl"]
+    avg_dl = idx["avg_dl"] or 1.0
     N = idx["doc_count"]
     k1 = params["k1"]
     b = params["b"]
-
     qterms = tokenize(text)
     if not qterms:
-        return []
-
-    # Defensive guard (v1.7.2; closes audit L7): avg_dl can only be 0 if the
-    # vocab is also empty (all chunks have zero tokens), in which case the
-    # loop never enters this divide path. But future refactors could change
-    # that invariant; the `or 1.0` keeps it safe by construction.
-    avg_dl_safe = avg_dl or 1.0
+        return {}
+    allow = set(chunk_ids) if chunk_ids is not None else None
     scores = defaultdict(float)
     for term in qterms:
         v = vocab.get(term)
@@ -224,10 +213,18 @@ def query(text, top_k=20):
         df = v["df"]
         idf = math.log(1 + (N - df + 0.5) / (df + 0.5))
         for cid, cnt in v["postings"]:
+            if allow is not None and cid not in allow:
+                continue
             dl = docs[cid]["dl"]
-            denom = cnt + k1 * (1 - b + b * dl / avg_dl_safe)
+            denom = cnt + k1 * (1 - b + b * dl / avg_dl)
             scores[cid] += idf * (cnt * (k1 + 1)) / denom
+    return scores
 
+
+def query(text, top_k=20, index=None):
+    idx = index if index is not None else load_index()
+    docs = idx["docs"]
+    scores = _okapi_scores(idx, text)
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
     return [
         {
@@ -239,9 +236,29 @@ def query(text, top_k=20):
     ]
 
 
+def best_chunk(query_text, page_address, index=None):
+    """同一 page_address のチャンクから BM25 最大を返す。点が無ければ chunk-000。"""
+    idx = index if index is not None else load_index()
+    docs = idx["docs"]
+    prefix = f"{page_address}:"
+    cids = [cid for cid in docs if cid.startswith(prefix) and cid[len(prefix):].isdigit()]
+    if not cids:
+        return None
+    scores = _okapi_scores(idx, query_text, chunk_ids=cids)
+    if scores:
+        cid, score = max(scores.items(), key=lambda kv: (kv[1], kv[0]))
+        return {"chunk_id": cid, "score": round(score, 6), "path": docs[cid]["path"]}
+    zero = f"{page_address}:0"
+    if zero in docs:
+        return {"chunk_id": zero, "score": 0.0, "path": docs[zero]["path"]}
+    return None
+
+
 def stats():
     idx = load_index()
     print(json.dumps({
+        "schema_version": idx.get("schema_version"),
+        "tokenize": idx.get("tokenize"),
         "doc_count": idx["doc_count"],
         "avg_dl": round(idx["avg_dl"], 2),
         "vocab_size": len(idx["vocab"]),
