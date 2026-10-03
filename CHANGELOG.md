@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-04
+
+サーベイのテーマ推薦、概念の表記揺れのゲート、再編纂の確定手順、log の月次ローテーションを置き、ingest と再編纂の台帳操作を並行セッションに耐えるようにする。
+
 ### Added
 
 - `wiki-survey-recommend`。設問が未定のとき、蓄積から `wiki-survey` のテーマ候補を ready / 姉妹 / 要 ingest / 別 skill に振り分ける。判定の材料は `wiki-survey-recommend.py` が出し、skill はその stdout だけを見る。
