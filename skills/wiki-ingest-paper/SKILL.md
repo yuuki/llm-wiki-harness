@@ -1,6 +1,6 @@
 ---
 name: wiki-ingest-paper
-description: "Paper-specialized wiki ingest. Downloads the paper PDF as an immutable original into `.raw/papers/`, then files the paper into the cross-source wiki layer (`wiki/sources/`, `wiki/entities/`, `wiki/concepts/`) with a create-paper-note-depth Japanese memo. Use this — not the generic wiki-ingest — whenever the source is a research paper: an arXiv URL/ID, a paper PDF (URL or local), a DOI, an OpenReview/ACL/USENIX link, or a paper title the user wants in the wiki. Triggers on: 'ingest this paper', 'この論文を wiki に', 'arxiv を ingest', 'PDF を取り込んで wiki 化', 'ingest https://arxiv.org/...'. The generic wiki-ingest only fetches HTML text and never downloads the PDF; reach for THIS skill when a real PDF should land in `.raw/papers/`. Distinct from create-paper-note, which writes a single-source detailed note into `papers/` — this skill instead builds cross-source wiki pages and never writes to `papers/`. When 3+ papers are given at once, this skill fans out subagents and ingests them in parallel by default — no need for the user to ask for '並行処理'."
+description: "Paper-specialized wiki ingest. Downloads the paper PDF into `.raw/papers/` as an immutable original, then files the paper into the wiki layer (`wiki/sources/`, `wiki/entities/`, `wiki/concepts/`) with a detailed Japanese memo. Use this, not the generic wiki-ingest (which only fetches HTML and never downloads the PDF), whenever the source is a research paper: an arXiv URL/ID, a paper PDF (URL or local), a DOI, an OpenReview/ACL/USENIX link, or a paper title the user wants in the wiki. Three or more papers at once are ingested in parallel by subagents by default. Never writes to `papers/` (that is create-paper-note). Dissertations and chapter-structured surveys over about 30 pages go to wiki-ingest-thesis. Triggers on: 'この論文を wiki に', 'arxiv を ingest', 'PDF を取り込んで wiki 化', 'ingest this paper'."
 ---
 
 # wiki-ingest-paper: 論文特化の wiki 取り込み
@@ -12,11 +12,11 @@ description: "Paper-specialized wiki ingest. Downloads the paper PDF as an immut
 `create-paper-note` とも役割が違う。あちらは単一ソースの詳細メモを `papers/` に書く。こちらは**複数ソース横断の定義・関係・矛盾**を `wiki/` に積み上げる。**このスキルは `papers/` を一切書き換えない。** 既存 `papers/` ノートがあれば wiki から一方向リンクで参照するだけにとどめる。
 
 > [!important] 最初に必ず読むこと
-> wiki を操作する前に [`wiki/meta/conventions.md`](../../wiki/meta/conventions.md) と [`wiki/meta/token-discipline.md`](../../wiki/meta/token-discipline.md) を読む。frontmatter・命名・言語(日本語常体)・出典規約は**標準形式より conventions が優先**される。本スキルの記述と conventions が食い違ったら conventions に従う。
+> wiki を操作する前に [`wiki/meta/conventions.md`](../../../wiki/meta/conventions.md) と [`wiki/meta/token-discipline.md`](../../../wiki/meta/token-discipline.md) を読む。frontmatter・命名・言語(日本語常体)・出典規約は**標準形式より conventions が優先**される。本スキルの記述と conventions が食い違ったら conventions に従う。
 >
 > **カタログ類は Read しない**: `wiki/index.md`・`wiki/{sources,entities,concepts}/_index.md`・`wiki/hot.md`・`wiki/log.md` の全文を `Read` してはならない。既存ページの発見は `wiki-resolve.py`、カタログ更新は `wiki-catalog.py`、本文の部分読みは `wiki-excerpt.py` に任せる。
 >
-> 1 論文担当 subagent へ渡す手順は [`references/subagent-brief.md`](references/subagent-brief.md) が正本である。フル SKILL を subagent に渡さない。ベクター図のクロップ手順は [`references/figures.md`](references/figures.md)。
+> 1 論文担当 subagent へ渡す手順は [`references/subagent-brief.md`](references/subagent-brief.md) が正本である。フル SKILL を subagent に渡さない。ベクター図のクロップは [`references/figures.md`](references/figures.md) の `scripts/crop-paper-figures.py` で行う。ページ全幅の手クリップはしない。
 
 ---
 
@@ -40,7 +40,7 @@ description: "Paper-specialized wiki ingest. Downloads the paper PDF as an immut
 
 論文が3本以上渡されたら、ユーザーが並行処理を指示しなくても**既定で subagent 並行モード**で処理する。プロトコルは汎用 `wiki-ingest` スキルの「Batch Ingest › Parallel mode」節に従う。本スキル固有の要点:
 
-- subagent 1体につき論文1本。各 subagent が Step 0(PDF取得)〜Step 3(concept) までを担当し、wiki ページ書き込みは `wiki-page-write.py`(新規)/ `wiki-append.py`(既存)を通す(ロックはヘルパーの内側)。**論文 1 本は読み手と書き手に分離しない**(本文が短く、分離の固定費のほうが大きい)。1 体が読んで書く。
+- subagent 1体につき論文1本。各 subagent が Step 0(PDF取得)〜Step 3.5(文献候補) までを担当し、wiki ページ書き込みは `wiki-page-write.py`(新規)/ `wiki-append.py`(既存)を通す(ロックはヘルパーの内側)。**論文 1 本は読み手と書き手に分離しない**(本文が短く、分離の固定費のほうが大きい)。1 体が読んで書く。
 - 共有ファイル(`wiki/index.md`・各 `_index.md`・`hot.md`・`log.md`・`overview.md`・`.raw/.manifest.json`)は subagent からは触らない。オーケストレータが全 subagent 完了後に `wiki-catalog.py`(prepend-log / prepend-hot / prepend-changelog / add-catalog-line / prepend-master)で一括更新する(カタログファイルを Read/Edit しない)。各 subagent は `wiki-page-write.py` 経由で自分の新規ページ分を採番してよい(直列化不要)。`scripts/allocate-address.sh` は直接実行しない(ヘルパー外の採番は失敗する)。同じ人物・組織の entity は書き込み直前に resolve し、既存なら append。衝突したらマージ復旧せず止める。
 - PDF ダウンロードと PyMuPDF/画像処理は重い。同時実行は 3〜4 体までに抑える
 - log エントリは論文ごとに1つずつ(`## [YYYY-MM-DD] ingest-paper | タイトル`)、commit は最後に1回
@@ -55,6 +55,7 @@ description: "Paper-specialized wiki ingest. Downloads the paper PDF as an immut
 - **書き込みの正はヘルパー**(`wiki-page-write.py` / `wiki-append.py`)。**ヘルパー呼び出しを `wiki-lock.sh` で包まない**(自己デッドロック)。新規 source / entity / concept を `Write` ツールで作らない。`Edit` はヘルパーで表現できない 1 箇所修正だけ。`wiki-catalog.py` は自己 lock するので包まない。
 - 新規は `wiki-page-write.py --batch`(採番・検証・lock を内包)。既存追記は `wiki-append.py --batch`。**1 ページに複数回 Edit を撃たない。**
 - ファイル名は conventions が優先。`scripts/` は vault ルート直下。manifest は `.raw/.manifest.json`。
+- Bash は毎回 vault ルートから実行する(`cd <vault 絶対パス> && <実処理>`)。skill のコマンドは `scripts/...` という相対パスで書かれており、相対 `cd` を一度打つと以降の相対パスがずれる。
 
 ---
 
@@ -102,6 +103,7 @@ PDF 本文だけでは書誌情報が不足しがちなので、補完する:
 - **arXiv**: `arxiv_html`(`https://arxiv.org/html/<id>`)を `WebFetch` で取得すると、タイトル・著者・所属・abstract・本文・図表キャプションが構造化テキストで得やすい(arXiv は PDF/abs に軽いアクセス制限があるため HTML 版を優先)。HTML 版が無い古い論文は abs ページ(`/abs/<id>`)を `WebFetch`。
 - **出版社版(IEEE/ACM/USENIX 等)**: `url` は実在するものだけを `WebFetch` で確認して採用。無ければ空。
 - **abstract は完全な日本語訳**を一文ずつ忠実に作る(常体)。原文を勝手に要約・補完しない。
+- **置き場所は `> [!abstract] 概要` callout に固定する。** raw(PDF / `.txt` / abs・HTML)に載っている Abstract は、source 本文の先頭をこの Obsidian callout にする。タイトル行は `概要` のみ(「(arXiv abstract の日本語訳)」などの括弧書きは付けない)。`## Abstract` 見出しにも、下の `## 概要` 節にも置かない。`## 概要` は wiki 側の 2-3 文要約であり、論文 Abstract の再掲ではない。
 
 ### 図表画像の扱い
 
@@ -122,7 +124,7 @@ thesis と分かったら:
 3. `.raw/papers/` に置いた PDF はそのまま残してよい。thesis セッションが `.raw/theses/` に取り直す。
 4. 完了報告は「thesis へ差し戻した」1 行。`python3 scripts/usage-report.py --self --log-line` は出してよい。
 
-同じチャットの続きで thesis を完走すると、常駐文脈が 300k を超え `$10` 帯になる。
+同じチャットの続きで thesis を完走すると、常駐文脈が膨らみ、以降の呼び出しすべての費用が跳ね上がる。
 
 ---
 
@@ -136,7 +138,7 @@ thesis と分かったら:
 
 ### 1. 本文参照図表の一覧を作り、コンタクトシートで対応づける
 
-まず**本文中の参照(inline reference)を洗い出して図表番号のチェックリストを作る**。これが取り込みの必須集合になる。**個別 `Read` の前に**コンタクトシートを 1 回作り、シートを Read する。`image-*.png` / attachment をシート無しで Read してはならない。シートと `index.txt` で番号が付いた attachment / `image-*.png` は Read しない。クロップ結果も、切り出し位置が疑わしいときだけ Read。シート 0 枚(埋め込み画像が無い)なら個別 Read も 0。ベクターは [`references/figures.md`](references/figures.md) のクロップ。本文参照分は全件必須という規律は変えない。
+まず**本文中の参照(inline reference)を洗い出して図表番号のチェックリストを作る**。これが取り込みの必須集合になる。**個別 `Read` の前に**コンタクトシートを 1 回作り、シートを Read する。`image-*.png` / attachment をシート無しで Read してはならない。シートと `index.txt` で番号が付いた attachment / `image-*.png` は Read しない。クロップ結果も、切り出し位置が疑わしいときだけ Read。シート 0 枚(埋め込み画像が無い)なら個別 Read も 0。ベクターは [`references/figures.md`](references/figures.md) のヘルパーでクロップする。ブロック先頭の `startswith("Fig.")` やページ全幅クリップは二段組み本文を巻き込むので使わない。本文参照分は全件必須という規律は変えない。
 
 `individual-reads` はコンタクトシート(`sheet-*.png`)を除く画像 Read の実数である。シート 1 枚のあとに attachment を 10 枚読んで 0 と書くことは禁止。
 
@@ -150,11 +152,13 @@ python3 scripts/contact-sheet.py \
 
 出現回数が 2 以上のものは本文参照ありと見なして**必須取り込み**。回数 1 のものはキャプション行だけの可能性があるので、出現位置を確認し、キャプション以外に現れなければ除外してよい(§2)。改行で分断された参照は list では拾えないことがある。キャプション行にあって list に無い番号は、本当に本文参照が無いのか目視してから除外する。list の出力を **図表番号のチェックリスト**として保持し、Step 1 完了時に突き合わせる。arXiv HTML 版があればそちらからも同じ抽出を行う。システム python に Pillow が無いときはコンタクトシートが `uv run --with pillow --cache-dir "$TMPDIR/uv-cache"` で再実行する(サンドボックスで `.git` 作成が拒否されたら権限付きで再実行)。
 
+`image-*.png` に無い本文参照図は [`references/figures.md`](references/figures.md) の `scripts/crop-paper-figures.py` で取る。`uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache"` を付ける。ページ全幅の手クリップはしない。
+
 シートのセルと `index.txt` でファイルへ戻す。斜め見しない。シートが 3 枚を超えるなら本文必須番号に対応する画像だけを `--glob` で渡す。シートを Read しすぎない。チェックリストにあるのに `image-*.png` に対応物が無い図表はベクター描画の可能性が高い。「埋め込み画像が取れなかったから図表は諦める」は認めない。
 
 ### 2. 取り込む図表を確定する(本文参照分は全件必須・枚数上限なし)
 
-§1 のチェックリストに載った図表は**すべて取り込む**。優先度による足切りはしない。図表点数の多い論文(10 点超)でも上限を設けず、逐一の重要度判定に時間をかけすぎず機械的にクロップ・埋め込みを進めてよい。
+§1 のチェックリストに載った図表は**すべて取り込む**。優先度による足切りはしない。本文参照分は全件取り込むので重要度判定は要らない。図表点数が多くても機械的にクロップ・埋め込みを進める。
 
 **除外してよいのは次だけ**(これ以外は含める):
 
@@ -181,8 +185,8 @@ cp ".raw/papers/<slug>/images/image-012-001.png" \
    "wiki/sources/_attachments/<slug>/fig05-results-comparison.png"
 ```
 
-> [!important] 画像ファイル名に `token`(大文字小文字問わず)を含めない
-> サンドボックスの Read 許可設定は `**/*token*` を含むパスを一律で読み取り拒否する(トークン・認証情報ファイルの誤読み防止のためのデフォルトルール)。論文が "Token-Level Loss" のような図を持つ場合でも、ファイル名は `fig04-perword-loss.png` のように **token を含まない別名**にする。同様の理由で `secret`・`password`・`credential`・`key` を含む名前も避ける。うっかり `token` を含む名前で保存すると、Read ツールが `File is in a directory that is denied by your permission settings` で失敗する(内容は正しく生成されているので `mv` でリネームすれば直る)。
+> [!note] Read が権限設定で拒否されたとき
+> 環境によっては、Read の拒否ルールが `token`・`secret`・`password`・`credential`・`key` を含むパスに当たることがある(`File is in a directory that is denied by your permission settings`)。そのときだけ、該当ファイルを `mv` で別名にする(例: `fig04-token-loss.png` → `fig04-perword-loss.png`)。画像の内容は正しく生成されている。拒否されない環境では、図の内容をそのまま表す名前でよい。
 
 ### 4. source ページへの埋め込み構文
 
@@ -218,29 +222,21 @@ bash scripts/fetch-slide-deck.sh "<スライド PDF の URL またはローカ�
 
 ## 再取り込み判定(manifest デルタ追跡)
 
-`.raw/.manifest.json` を見て、未変更ソースの再処理を避ける。キーは PDF パス。
+`.raw/.manifest.json` の記録を見て、未変更ソースの再処理を避ける。キーは PDF パス。manifest は 2 MB を超え、他セッションも書き込むので、Read したり手で書き戻したりしない。`scripts/wiki-manifest.py` が、ロックの内側で 1 件ずつ読み書きする。
 
 ```bash
-[ -f .raw/.manifest.json ] && echo exists || echo "no manifest yet"
 md5 -q .raw/papers/<slug>.pdf 2>/dev/null || md5sum .raw/papers/<slug>.pdf | cut -d' ' -f1
+python3 scripts/wiki-manifest.py get ".raw/papers/<slug>.pdf"     # 終了 3 = 未登録
 ```
 
-- PDF のハッシュが manifest の記録と一致 → 「取り込み済み(未変更)。`force` で再取り込み」と報告してスキップ。
-- 無い/異なる → 取り込みを実行。完了後 `{hash, ingested_at, pages_created, pages_updated}` を記録して書き戻す。
+- `hash` が PDF のハッシュと一致 → 「取り込み済み(未変更)。`force` で再取り込み」と報告してスキップ。
+- 未登録、またはハッシュが異なる → 取り込みを実行。完了後に記録する(Step 4)。
 - ユーザーが「force ingest」「再取り込み」と言ったらデルタ判定をスキップ。
 
-manifest 形式(無ければ作成):
-```json
-{
-  "sources": {
-    ".raw/papers/arxiv-2501.01234.pdf": {
-      "hash": "abc123",
-      "ingested_at": "2026-06-02",
-      "pages_created": ["wiki/sources/2025__arXiv__Title.md", "wiki/entities/Some Author.md"],
-      "pages_updated": ["wiki/concepts/異常検知.md"]
-    }
-  }
-}
+記録は次の 1 呼び出しで行う。エントリは manifest の最上位に、`.raw/...` のパスをキーとして入る。`put` は既存エントリに欄を上書きで足す。JSON が長いときは `--json-file <path>` で渡す。
+
+```bash
+python3 scripts/wiki-manifest.py put ".raw/papers/<slug>.pdf" --json '{"hash": "<md5>", "ingested_at": "YYYY-MM-DD", "pages_created": ["wiki/sources/@2025__arXiv__Title.md", "wiki/entities/Some Author.md"], "pages_updated": ["wiki/concepts/異常検知.md"]}'
 ```
 
 ---
@@ -295,18 +291,23 @@ key_claims:
 
 ### 本文(create-paper-note 由来の深掘りメモ)
 
-見出しは `##` 以下を使う(ページ先頭の H1 タイトルは Obsidian の title で代替されるため省略可)。すべて**日本語常体**。**出典に無いことは書かない**——訓練データの知識・推測・もっともらしい埋め草は禁止。各主張は PDF 本文・図表に遡及できること。
+本文の先頭行に H1 を 1 つだけ置く(`# <frontmatter の title と同じ文字列>`)。`wiki-page-write.py` は H1 が 0 個または 2 個以上のページを検証で拒否する。以降の見出しは `##` 以下を使う。すべて**日本語常体**。**出典に無いことは書かない**——訓練データの知識・推測・もっともらしい埋め草は禁止。各主張は PDF 本文・図表に遡及できること。
+
+> [!important] raw の Abstract は `> [!abstract] 概要` にする
+> 既存 source の多くと同じく、論文原本の Abstract は本文先頭の Obsidian callout に置く。タイトルは **`概要` のみ**。括弧書きの補足(`(abstract の日本語訳)` 等)は付けない。`## Abstract` を立てない。直後の `## 概要` は wiki が書く 2-3 文の要約であり、Abstract 本文の置き場ではない。
 
 ```markdown
-> [!abstract] 概要(arXiv abstract の日本語訳)
-> {abstract を一文ずつ忠実に和訳。要約や補完をしない}
+# {frontmatter の title と同じ文字列}
+
+> [!abstract] 概要
+> {raw に載っている Abstract を一文ずつ忠実に和訳。要約や補完をしない}
 
 ## 論文情報
 - タイトル / 著者・所属 / 媒体 / 発表年
 - arXiv ID・DOI・コード URL(あれば)
 
 ## 概要
-論文全体の要約を 2-3 文(常体)。
+論文全体の要約を 2-3 文(常体)。論文 Abstract の再掲ではない。
 
 ## 問題設定
 入力と出力、前提条件、必要なデータ。
@@ -360,7 +361,7 @@ python3 scripts/wiki-resolve.py entity:"<著者A>" entity:"<著者B>" entity:"<�
   - `entity_tier: stub` — 初出の共著者・一度きりの言及。frontmatter + 所属/役割 2〜3 行だけ。本文を育てない。
   - `entity_tier: full` — 2 ソース目以降、または繰り返し登場する組織/製品/ハブ(書籍・thesis 含む)。
   - 既存の本文ページは `full` とみなす。`entity_tier` が無いページを遡及改名しない。stub の更新は frontmatter だけでよい(excerpt 不要)。
-- 著者ページの `aliases` には姓だけの別名(`Ro` 等)も入れて検索性を上げる。
+- `aliases` に入れるのは本人・当該組織を指す名前だけ(英名と和名、正式名と略称、綴りゆれ)。姓だけの別名や `Y. Li` 型の引用表記は同姓の別人と衝突するので入れない(conventions §12 ルール 6)。
 - `first_mentioned: "[[@2025__arXiv__Title]]"`(この source ページ。`@` 付き)。
 - **新規作成する entity ページにも `address:` を採番する**(`wiki-page-write.py` が先頭キーに挿入する。source と同じ位置)。既存 entity への追記は `wiki-append.py` の `section_append`(例: `## 関連ソース`)を使い、既存の `address:` はそのまま保持して再採番しない。
 
@@ -376,7 +377,9 @@ python3 scripts/wiki-resolve.py entity:"<著者A>" entity:"<著者B>" entity:"<�
 python3 scripts/wiki-resolve.py concept:"<候補1>" concept:"<候補2>" concept:"<候補3>" --compact
 ```
 
-**単一論文で閉じる用語は source ページに留める。** concept を新設するのは、(a) resolve で既存がヒットしない、かつ (b) 2 ソース以上にまたがるか、今後またがることが明らかなハブのときだけ。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れた候補は Step 4 の log エントリに `Deferred:` 行として残し、次の関連ソースで育てる。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。
+compact が `HIT` ならその頁を更新する。`domain` が違っても新設しない。分野差は受信箱へ 1 行。`NONE` かつ `dialect-gate:` なら concept を新設しない。観察は source に留め、`concept-candidates.py add --reason "dialect-gate"` する。`ready` でも `promote` しない。`ledger:` で `ready` かつ dialect-gate が無く、`is_create_blocked` でもないときだけ、新設枠で `promote` してよい。`concept-resolve.py` のサブコマンドを取り込み中に呼ばない。方言表を編集しない。concept の新規は `wiki-page-write.py` だけ（`Write` 直は禁止）。
+
+**単一論文で閉じる用語は source ページに留める。** concept を新設するのは、(a) resolve が HIT でも `dialect-gate:` でもない、かつ (b) 2 ソース以上にまたがるか、今後またがることが明らかなハブのときだけ。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れた候補は Step 4 の log エントリに `Deferred:` 行として残し、次の関連ソースで育てる。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)かつ compact に `dialect-gate:` が無く、`is_create_blocked` でもないときだけ今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。研究関心プロファイル(`wiki-profile.py`)へのマッチ度は新設・保留の判断に使わない(conventions §12 ルール 3)。
 
 既存 concept を更新するときは全文を `Read` しない。`wiki-excerpt.py` で必要節だけ読む。**触る concept を並べて 1 回で読む**(ページ間は `=== <パス> ===` 行で区切られる)。
 
@@ -399,11 +402,34 @@ concept を書く前に、スキル世界のテーマ塊から `- 概念:` を�
 5. excerpt が今回 source の主題に接するものだけを `- 概念:` に足す。切れたページは読んだことにせず related に足さない。1 ページあたり概念 related は既存込み最大 5、うち塊由来は最大 3。この 3 は concept 新規 3 / 更新 5 の枠を消費しない
 6. 新規は `wiki-page-write.py` 初回本文の `## 関連` 行 `- 概念: [[...]] / [[...]]`。更新は同じ append batch の `related.概念`
 
-未構築のまま / 既存 concept 0 / 全て off-backbone / 接するハブ 0 なら、今どおり resolve 結果だけを related にする。JSON を開けて補完してはならない。
+未構築のまま / 既存 concept 0 / 全て off-backbone / 接するハブ 0 なら、resolve 結果だけを related にする。JSON を開けて補完してはならない。
 
 **ハブ concept**(`## 子概念` がある、または厚いページ)は excerpt だけ読み、地図として扱う。具体的な知見は最も近い**子 concept** へ書く。ハブへは子へのリンクと、子をまたぐ観察だけを足す。
 
 規約は conventions §8。ingest の追記先は `## 未編纂の観察`(旧名 `## 横断的知見`)と `## 未解決の問い` だけ。**主題節を書き換えない。** 追記は `wiki-append.py` で 1 ページ 1 回。単一ソースで言える事実は受信箱に書かない。補強・反証する観察は冒頭に `[節名]`。矛盾は `> [!contradiction]`。見出しに「知見」「観察」「考察」「まとめ」「横断的」を使わない。
+
+---
+
+## Step 3.5: 文献候補台帳(source のあと、catalog の前)
+
+source ページを書いたあと、catalog の前にこの順で呼ぶ。候補を ingest しない。`extract` は本文の `[N]` から役割も書く。対比は直前窓の定型句である。ready は変えない。`Deferred:` に文献識別子も題名も書かない。
+
+```bash
+python3 scripts/paper-refs.py extract --source "@<今回>"
+python3 scripts/paper-refs.py mark-ingested --page "wiki/sources/@<今回>.md"
+```
+
+終了コード:
+
+| 終了 | 振る舞い |
+|---|---|
+| 0 | log に `Ref-candidates: mentions=+N ready=M`。`N` は stdout の `mentions_added`、`M` は stdout の `ready`(索引欠落なら 0) |
+| 3 | extract または mark を飛ばし、log に `Ref-candidates: skipped missing`。ingest は続ける |
+| 75 | CLI は待っていない。技能が 2 秒待って同じコマンドを 1 回だけ再試行する。なお 75 なら log に `Ref-candidates: skipped lock`。ingest は続ける。落ちた文献表は台帳に無い。復旧は後からの `backfill`(lint では走らせない) |
+| 1 | 壊れた台帳。ingest を止めて報告する。空台帳で上書きしない |
+| 2 | 技能側の呼び間違い。ingest を止める |
+
+取り込み前の重複判定は Step 0 の `paper-ids check` が行う。本台帳を取り込み前ゲートには使わない。
 
 ---
 
@@ -420,6 +446,7 @@ python3 scripts/wiki-catalog.py prepend-log --text "$(cat <<'EOF'
 - Pages updated: [[Page 3]]
 - Key insight: 新しく分かったことを一文で。
 - Deferred: [[候補 concept]] — 今回の上限超過。次の関連ソースで。
+- Ref-candidates: mentions=+N ready=M
 EOF
 )"
 
@@ -433,19 +460,29 @@ EOF
 )"
 
 python3 scripts/wiki-catalog.py prepend-changelog \
-  --file wiki/concepts/_index.md --text "### YYYY-MM-DD ingest-paper | タイトル\n- 新規 concept: [[A]]\n"
+  --file wiki/concepts/_index.md --text "$(cat <<'EOF'
+### YYYY-MM-DD ingest-paper | タイトル
+- 新規 concept: [[A]]
+EOF
+)"
 
 python3 scripts/wiki-catalog.py add-catalog-line \
   --file wiki/concepts/_index.md \
   --section "現行コンセプトカタログ" \
   --line "- [[A]]"
 
-python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD ingest-paper | タイトル\n- Source: [[@...]]\n"
+python3 scripts/wiki-catalog.py prepend-master --text "$(cat <<'EOF'
+### YYYY-MM-DD ingest-paper | タイトル
+- Source: [[@...]]
+EOF
+)"
 ```
+
+複数行の `--text` は必ず heredoc で渡す。二重引用符の中の `\n` は改行にならず、カタログに文字のまま入る。
 
 1. 新規 source/entity/concept ごとに、該当 `_index.md` へ `prepend-changelog` + `add-catalog-line`(必要な section を指定)。
 2. 大局が変わったら `wiki/overview.md` を更新(overview は通常サイズのため Read/Edit 可)。
-3. `.raw/.manifest.json` に `{hash, ingested_at, pages_created, pages_updated}` を記録して書き戻す。
+3. `.raw/.manifest.json` に `{hash, ingested_at, pages_created, pages_updated}` を `wiki-manifest.py put` で記録する(「再取り込み判定」の節)。
 
 ### BM25 索引の差分更新
 
@@ -466,15 +503,15 @@ python3 scripts/wiki-retrieve-refresh.py \
 新規ページは 1 回、既存ページへの追記も 1 回。ロック取得・解放はヘルパーの内側にある。
 
 ```bash
-# 新規: source・entity・concept をまとめて作る
-cat > /tmp/pages.json <<'EOF'
-[{"path": "wiki/sources/@2025__arXiv__Title.md", "content_file": "/tmp/source.md"},
- {"path": "wiki/entities/Jane Doe.md",           "content_file": "/tmp/entity.md"}]
+# 新規: source・entity・concept をまとめて作る($TMPDIR を展開させるので EOF を引用符で囲まない)
+cat > "$TMPDIR/pages.json" <<EOF
+[{"path": "wiki/sources/@2025__arXiv__Title.md", "content_file": "$TMPDIR/source.md"},
+ {"path": "wiki/entities/Jane Doe.md",           "content_file": "$TMPDIR/entity.md"}]
 EOF
-python3 scripts/wiki-page-write.py --batch /tmp/pages.json
+python3 scripts/wiki-page-write.py --batch "$TMPDIR/pages.json"
 
 # 既存: concept の受信箱・問い・関連・出典・frontmatter sources を一括更新
-cat > /tmp/appends.json <<'EOF'
+cat > "$TMPDIR/appends.json" <<'EOF'
 [{"page": "wiki/concepts/異常検知.md", "date": "YYYY-MM-DD",
   "observations": ["[節名] 観察(Source: [[@2025__arXiv__Title]])"],
   "questions_add": ["残った問い"],
@@ -483,8 +520,10 @@ cat > /tmp/appends.json <<'EOF'
   "sources_section": [{"link": "[[@2025__arXiv__Title]]", "note": "何を根拠にしたか"}],
   "frontmatter_sources": ["[[@2025__arXiv__Title]]"]}]
 EOF
-python3 scripts/wiki-append.py --batch /tmp/appends.json   # --dry-run で差分だけ確認できる
+python3 scripts/wiki-append.py --batch "$TMPDIR/appends.json"   # --dry-run で差分だけ確認できる
 ```
+
+一時ファイルは `$TMPDIR` に書く。`/tmp` 直下はサンドボックスで書き込みを拒否されることがあり、固定名は並行セッションで上書きし合う。
 
 いずれもページ単位の JSON を標準出力に 1 行ずつ返し、ロックを取れなかったページだけを終了コード 75 で報告して残りは続行する。追記は冪等なので、同じ spec を再実行すれば取り逃したページだけが適用される。rc=75 は「他の書き手が処理中」なので 2 秒待って 1 回だけ同じヘルパーを再試行し、なお取れなければ上書きせず `wiki-catalog.py prepend-log` に skipped lock として残す。ヘルパーが落ちても新規 source / entity / concept を `Write` で作らない。止めて報告する。`wiki-lock.sh acquire` → `Edit` → `release` は、既存ページの 1 箇所修正でヘルパーが表現できないときだけ(ヘルパー呼び出しをこれで包むと自己デッドロック)。per-file 粒度(別ページは並行可)、60 秒で stale 解除、release は `rm -f`。
 
@@ -506,7 +545,7 @@ python3 scripts/wiki-append.py --batch /tmp/appends.json   # --dry-run で差分
 > 本ソースは Y と述べるが既存 wiki は X。詳細は [[既存ページ]]。
 ```
 
-`[!contradiction]` は `.obsidian/snippets/vault-colors.css` のカスタム callout。スニペットが無くても既定スタイルにフォールバックして動く。
+`[!contradiction]` は Obsidian の組み込みに無い callout 種別で、既定スタイルで描画される。
 
 ---
 
@@ -517,6 +556,7 @@ python3 scripts/wiki-append.py --batch /tmp/appends.json   # --dry-run で差分
 - 全主張を PDF 本文・図表・abstract のいずれかに遡及。どれにも遡れないものは創作 → 削除か、出典が支える内容に置換。
 - 数値・固有名は PDF 本文/図表で裏取り。文字起こし的なノイズ(HTML 版の崩れ等)があれば該当文に括弧で注記。
 - 推定値(arXiv ID から導いた発行年など)は推定と分かるよう報告。
+- 数値は機械照合する。source ページを書いた直後に `python3 scripts/claim-audit.py numbers --source-page "wiki/sources/@YYYY__SOURCE__Title.md"`、concept への追記の前に spec をファイルへ書いて `python3 scripts/claim-audit.py numbers --spec <spec.json>` を打つ。終了 1 の `missing` は `rg -n -C2 '<数値>' ".raw/papers/<slug>.txt"` で原文を引いて直すか消す(PDF は開かない)。観察が既存 source の数値を述べるなら、その行にその source の wikilink を置く。和・比のような導出値は導出と分かる書き方にする。`caption_missing`(図から読んだ数値)は目視済みなら残してよい。手順の詳細は [`references/subagent-brief.md`](references/subagent-brief.md) の「数値の照合」。
 - 報告は階層化: ✅ 完全に出典裏付けあり / ⚠️ 不確実・要注記 / ℹ️ 推定。明らかな修正は適用し、判断を要する点はユーザーに上げる。
 
 ### 図表網羅チェック(必須)
@@ -532,7 +572,7 @@ python3 scripts/wiki-verify-ingest.py --pages "wiki/sources/@YYYY__SOURCE__Title
 - `unresolved_embeds=0` と `unused_attachments=0` を確かめる(未解決の埋め込みは `EMBED`、未使用の attachment は `ATTACH-UNUSED` として出る)。`embeds=` は埋め込み総数。
 - frontmatter の必須項目・H1・wikilink 解決も同じ呼び出しで見る。
 
-差分が出たら、**§2 の除外リストに該当する場合を除き、その場で追加クロップして埋め込む**。「時間が無いので後で」にしない。チャット報告には次を必ず含める。
+差分が出たら、**§2 の除外リストに該当する場合を除き、その場で `scripts/crop-paper-figures.py` を再実行して埋め込む**。ページ全幅の手クリップはしない。「時間が無いので後で」にしない。チャット報告には次を必ず含める。
 
 - 本文参照図表の総数 / 埋め込み済み数
 - 除外した図表番号とその理由(除外リストのどれに当たるか)
@@ -544,7 +584,7 @@ python3 scripts/wiki-verify-ingest.py --pages "wiki/sources/@YYYY__SOURCE__Title
 
 ingest の各ステップ(source・entity・concept・index/hot/log/manifest 更新・`wiki-retrieve-refresh.py`)が完了したら、ユーザーの明示指示を待たずに**自動でコミットする**(vault ルート `CLAUDE.md` の「Claude は意味のある作業区切りでは、ユーザーの明示指示を待たずに自動コミットしてよい」という方針に従う。1 論文の ingest = 1 まとまりとして扱う)。今回の ingest で作成・更新した具体ファイルだけを stage する。`git add wiki/ .raw/` のような広い指定は使わない。未関連の dirty file や過去の raw 成果物を巻き込むためだ。
 
-> [!important] 共有メタファイル(`wiki/index.md`・`hot.md`・`log.md`・`wiki/{sources,entities,concepts}/_index.md`・`.raw/.manifest.json`)は他の未コミット ingest の変更を含んでいる場合がある。stage 前に必ず `git status --porcelain=v1 -- <path>` と `git diff -- <path>` で、自分がこのステップで書いた差分だけが含まれているか確認する。他セッションの未コミット変更が混在していたら、コミットメッセージにそのファイルを含めてよいが、コミットメッセージ自体は本 ingest のタイトルのままにし、混在を後から `git log -p` で追跡できるようにする。
+> [!important] 共有メタファイル(`wiki/index.md`・`hot.md`・`log.md`・`wiki/{sources,entities,concepts}/_index.md`・`.raw/.manifest.json`)は他の未コミット ingest の変更を含んでいる場合がある。stage 前に必ず `git status --porcelain=v1 -- <path>` と `git diff -- <path>` で、自分がこのステップで書いた差分だけが含まれているか確認する。他セッションの未コミット変更が混在していたら、コミットにそのファイルを含めてよいが、コミットメッセージ自体は本 ingest のタイトルのままにし、混在を後から `git log -p` で追跡できるようにする。
 >
 > 破壊的操作(force push・履歴改変・リモート push)は引き続き明示確認が必要。ローカルコミットの自動化のみがこの規則の対象。
 
@@ -560,9 +600,14 @@ git add \
   "wiki/sources/_attachments/<attachment-slug>/<selected-images>" \
   "wiki/entities/<updated-entity>.md" \
   "wiki/concepts/<updated-concept>.md" \
+  "wiki/sources/_index.md" "wiki/entities/_index.md" "wiki/concepts/_index.md" \
   "wiki/index.md" "wiki/hot.md" "wiki/log.md"
-git commit -m "wiki: ingest-paper | <論文タイトル>"
+git add -f .vault-meta/concept-candidates.json .vault-meta/paper-ref-candidates.json   # 台帳に積んだものだけ
+git commit -m "wiki: ingest-paper | <論文タイトル>" -- <stage したのと同じパス>
 ```
+
+- `.vault-meta/` は `.gitignore` の対象だが、台帳は追跡されている。`-f` を付けないと `git add` 全体が ignored で止まる。
+- `git commit` にも stage したのと同じパスを渡して対象を限定する(wiki/CLAUDE.md 鉄則 8)。並行セッションが stage した変更を巻き込まないためである。
 
 § Step 0.6 でスライドも取り込んだ場合は `.raw/slides/<slide-slug>/`(PDF・テキスト・全ページ画像)を丸ごと add する。スライドを取り込まなかった場合はこの行を省く。
 
@@ -574,34 +619,11 @@ git commit -m "wiki: ingest-paper | <論文タイトル>"
 
 ## やってはいけないこと
 
-- **`.raw/` の既存ファイル(利用者が投入した原本)を変更しない。** ただし本スキルが新規生成する `.raw/papers/<slug>.pdf` と `.txt`、および `.raw/.manifest.json` は対象外(これらは生成・更新してよい)。
+原本・既存ノート・採番・他セッションの作業を壊す操作だけを、ここに再掲する。図表の読み方、Abstract の置き場、長編の差し戻し、計測の取り方など手順上の注意は、各 Step と [`references/figures.md`](references/figures.md) にある。
+
+- **`.raw/` の既存原本(利用者が投入したファイル)を変更しない。** 例外は、本スキルが生成する `.raw/papers/<slug>.pdf`・`.txt`・`<slug>/images/`、スライドも取り込んだときの `.raw/slides/<slide-slug>/`、`.raw/.manifest.json` の更新だけである。
 - **`papers/`・`research/`・`structures/`・`notes/` を書き換えない。** wiki から一方向リンクで参照するだけ。MOC への逆リンク追記は人間承認時のみ 1 件単位。
-- **`wiki/index.md`・各 `_index.md`・`hot.md`・`log.md` の全文を Read しない。** カタログは入力にしない。
-- 重複ページを作らない。作成前に必ず `wiki-resolve.py` で既存を確認(index 全文や grep 全走査に頼らない)。
-- ログ・ホット・索引の更新は `wiki-catalog.py` で行う(Read/Edit による手書き追記はしない)。すべての取り込みを記録する。
-- ペイウォール/HTML を掴んだ壊れた PDF を原本として残さない(ヘルパーが検証して止める)。
-- **`image-*.png` / attachment をコンタクトシート無しで Read しない。** 個別 Read はシート上で番号が確定しないセルだけ。シート 0 枚なら個別 Read も 0。
-- **`cd` だけの Bash は禁止。** 作業ディレクトリは呼び出しをまたいで持続する。必ず `cd <vault絶対パス> && <実処理>` の 1 呼び出し。
-- **`scripts/allocate-address.sh` を直接実行しない。** 採番はヘルパー外では失敗する。`wiki-page-write.py` がロック内で行う。`--address` は既に採番済みの値を渡すときだけ。
-- **新規 source / entity / concept を `Write` ツールで作らない。** 新規は `wiki-page-write.py`、既存追記は `wiki-append.py`。
-- **並行 ingest で同じ entity を後勝ち上書きしない。** 書き込み直前に resolve し、既存なら append。衝突したらマージ復旧せず止める。
-- **シートで番号が付いた attachment を Read しない。** `individual-reads` はシートを除く画像 Read の実数。
-- **このセッションのまま `wiki-ingest-thesis` を完走しない。** 長編と分かったら新セッションへ差し戻す。`fetch-book.sh` を paper セッションから呼ばない。
-- **完了報告の計測に `--latest` を使わない。** `--self`(Claude Code / Codex / Cursor の環境変数。失敗時だけ `--session <ID>`)にする。Cursor や Codex 経由を理由にスキップしない。
-
----
-
-## How to think(10 原則対応)
-
-| # | 原則 | ここでの適用 |
-|---|------|------|
-| 1 | OBSERVE(ext) | PDF 本文を抽出して全部読む。長い論文でも省略しない。 |
-| 2 | OBSERVE(int) | 論文の枠組みに引きずられていないか。異論は contradiction callout に。 |
-| 3 | LISTEN | なぜこの論文を wiki に入れるのか。ユーザーが引き出したい横断知識は何か。 |
-| 4 | THINK | どの entity・concept がページに値するか。既存ページとの矛盾は。 |
-| 5 | CONNECT(lat) | 本論文の主張 vs 既存ソース。矛盾は最高シグナル。 |
-| 6 | CONNECT(sys) | `wiki-mode.py route` + `wiki-lock.sh` + `wiki-resolve.py` / `wiki-catalog.py` + `structures/*.MOC.md` への一方向リンク。 |
-| 7 | FEEL | 半年後にも効くページか。転写でなく統合を。 |
-| 8 | ACCEPT | すべての主張が wiki 向きではない。取捨選択は機能であってバグではない。 |
-| 9 | CREATE | source + entity + concept + cross-reference + 必要なら contradiction。 |
-| 10 | GROW | 取り込み中に見つけた矛盾は question 化してフォローアップ。 |
+- **新規ページは `wiki-page-write.py`、既存ページへの追記は `wiki-append.py` だけで書く。** `Write` で新規を作らない。`scripts/allocate-address.sh` を直接実行しない(採番はヘルパーがロック内で行う。`--address` は採番済みの値を渡すときだけ)。ヘルパーを `wiki-lock.sh` で包まない。
+- **並行 ingest で既存 entity を後勝ちで上書きしない。** 書き込み直前に resolve し、既存なら append。衝突したらマージ復旧せず止める。
+- **共有カタログと manifest は subagent が触らない。** 更新は `wiki-catalog.py` だけで行い(Read/Edit による手書き追記はしない)、すべての取り込みを log に記録する。
+- **stage と commit は、今回のファイルをパス明示で行う。** `git add wiki/ .raw/` のような広い指定を使わない。subagent は git の書き込み操作をしない。

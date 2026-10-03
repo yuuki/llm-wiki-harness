@@ -21,7 +21,7 @@ conventions §12 は「concept の新設は 2 ソース以上にまたがると�
       「これは concept にしない」と決めた候補。以後の add は言及だけ積み、state は変えない。
   python3 scripts/concept-candidates.py reopen NAME
   python3 scripts/concept-candidates.py seed-from-log [--dry-run]
-      wiki/log.md の `- Deferred:` 行から候補を機械的に拾って台帳に入れる(冪等)。
+      wiki/log.md と wiki/log/*.md の `- Deferred:` 行から候補を機械的に拾って台帳に入れる(冪等)。
       これはスクリプトによる走査であり、エージェントが log を読む行為ではない。
   python3 scripts/concept-candidates.py lookup NAME [NAME ...]
       resolve 用。名前または別名が一致する候補を返す(無ければ空)。
@@ -64,6 +64,7 @@ EXIT_MISSING = 3
 
 LEDGER_REL = ".vault-meta/concept-candidates.json"
 LOG_REL = "wiki/log.md"
+LOG_ARCHIVE_REL = "wiki/log"  # 月次アーカイブ(wiki-catalog.py が過去月を移す)
 CONCEPTS_DIR = "wiki/concepts"
 STATES = ("pending", "promoted", "rejected")
 DEFAULT_MIN_SOURCES = 2
@@ -307,12 +308,27 @@ def cmd_show(args):
     return EXIT_OK
 
 
+def _concept_resolve():
+    import importlib.util
+    os.environ["WIKI_VAULT_ROOT"] = str(VAULT_ROOT)
+    spec = importlib.util.spec_from_file_location(
+        "concept_resolve", _SCRIPTS / "concept-resolve.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def cmd_promote(args):
     page = args.page.strip()
     if not page.startswith(CONCEPTS_DIR + "/"):
         page = f"{CONCEPTS_DIR}/{strip_link(page)}.md"
     if not (VAULT_ROOT / page).is_file():
         log(f"ERR: page not found: {page}")
+        return EXIT_MISSING
+    cr = _concept_resolve()
+    ignore = {Path(page).stem}
+    if cr.is_merged_drop(args.name) or cr.is_create_blocked(args.name, ignore_stems=ignore):
+        log(f"ERR: {cr.create_block_reason(args.name)}")
         return EXIT_MISSING
     with page_lock(LEDGER_REL):
         data = load_ledger()
@@ -425,7 +441,10 @@ def cmd_seed_from_log(args):
     if not path.is_file():
         log(f"ERR: {LOG_REL} not found")
         return EXIT_MISSING
-    text = path.read_text(encoding="utf-8")
+    # 台帳への記録は冪等なので、移動済みの月を何度読み直しても二重には数えない
+    texts = [p.read_text(encoding="utf-8")
+             for p in sorted((VAULT_ROOT / LOG_ARCHIVE_REL).glob("*.md"), reverse=True)]
+    text = path.read_text(encoding="utf-8") + "\n" + "\n".join(texts)
     planned = []
     for ent in split_log_entries(text):
         # concept 候補を生むのは ingest 系エントリだけ。tooling / query / recompile の Deferred は作業の保留
@@ -468,7 +487,10 @@ def cmd_seed_from_log(args):
 def render_report(data, min_sources):
     rows = [public_entry(k, e, min_sources) for k, e in data["candidates"].items()]
     pending = [r for r in rows if r["state"] == "pending"]
-    ready = [r for r in pending if r["ready"]]
+    cr = _concept_resolve()
+    gated = [r for r in pending if cr.is_create_blocked(r["name"])]
+    gated_names = {r["name"] for r in gated}
+    ready = [r for r in pending if r["ready"] and r["name"] not in gated_names]
     stale_promoted = [r for r in pending if r["exists_as"]]
     rejected = [r for r in rows if r["state"] == "rejected"]
     promoted = [r for r in rows if r["state"] == "promoted"]
@@ -477,6 +499,12 @@ def render_report(data, min_sources):
     out.append(f"- 新設閾値(独立 source {min_sources} 本以上)に達した pending: {len(ready)} 件")
     out.append(f"- 同名の concept ページが既にあるのに pending のまま: {len(stale_promoted)} 件(`promote` し忘れ)")
     out.append("")
+    if gated:
+        out.append("### 方言ゲート（新設禁止。`plan` で alias-only か rejected）")
+        out.append("")
+        for r in sorted(gated, key=lambda r: r["name"]):
+            out.append(f"- {r['name']}(source {r['source_count']})")
+        out.append("")
     if ready:
         out.append(f"### 新設を検討する候補({len(ready)} 件)")
         out.append("")
@@ -494,7 +522,8 @@ def render_report(data, min_sources):
         for r in stale_promoted:
             out.append(f"- {r['name']} → `{r['exists_as']}`(`concept-candidates.py promote \"{r['name']}\" --page \"{r['exists_as']}\"`)")
         out.append("")
-    waiting = [r for r in pending if not r["ready"] and not r["exists_as"]]
+    waiting = [r for r in pending
+               if not r["ready"] and not r["exists_as"] and r["name"] not in gated_names]
     if waiting:
         out.append(f"### 閾値未達の pending({len(waiting)} 件、source 数の多い順に 15 件まで)")
         out.append("")

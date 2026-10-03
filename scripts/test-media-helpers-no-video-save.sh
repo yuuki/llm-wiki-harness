@@ -42,8 +42,15 @@ chmod +x "$BIN_DIR/ffmpeg"
 
 cat > "$BIN_DIR/yt-dlp" <<'EOF'
 #!/usr/bin/env bash
+# 実際の yt-dlp を模す: メタデータ・字幕・動画を別々の呼び出しで返す。
+# FAKE_VIDEO_FAIL=1 のときは、字幕ファイルだけ残して動画取得に失敗する(HTTP 429 で中断した状態)。
+args=" $* "
 if [ "${1:-}" = "--print" ]; then
   printf 'Fake Video Title\n'
+  exit 0
+fi
+if [[ "$args" == *" --dump-single-json "* ]]; then
+  printf '%s\n' '{"title": "Fake \"Quoted\" Title", "uploader": "Fake Channel", "upload_date": "20260924", "duration": 120, "subtitles": {"en": []}, "automatic_captions": {"en-orig": [], "en-ja": []}, "chapters": [{"start_time": 0, "title": "Intro"}]}'
   exit 0
 fi
 
@@ -57,10 +64,18 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$out" ] || exit 1
+if [[ "$args" == *" --skip-download "* ]]; then
+  [[ "$args" == *" --sub-langs en "* ]] || exit 1
+  printf 'WEBVTT\n\n00:00:01.000 --> 00:00:02.000\ncaption\n' > "${out//%(ext)s/en.vtt}"
+  exit 0
+fi
+if [ "${FAKE_VIDEO_FAIL:-0}" = "1" ]; then
+  printf 'WEBVTT\n' > "${out//%(ext)s/en-orig.vtt}"
+  exit 1
+fi
 path="${out//%(ext)s/mp4}"
 mkdir -p "$(dirname "$path")"
 printf 'downloaded video\n' > "$path"
-printf '1\n00:00:00,000 --> 00:00:01,000\ncaption\n' > "${path%.*}.en.srt"
 EOF
 chmod +x "$BIN_DIR/yt-dlp"
 
@@ -86,7 +101,7 @@ run_prepare_video_source_local_does_not_save_video() {
   cd "$work"
 
   printf 'fake video\n' > talk.mp4
-  PATH="$TEST_PATH" bash prepare-video-source.sh talk.mp4 sample-video >/tmp/prepare-video-source.out
+  PATH="$TEST_PATH" bash prepare-video-source.sh talk.mp4 sample-video >"$TMP_ROOT"/prepare-video-source.out
 
   assert_no_files ".raw/videos/sample-video/media/video.*"
   assert_file ".raw/videos/sample-video/audio.m4a"
@@ -101,13 +116,32 @@ run_prepare_video_source_url_does_not_save_video() {
   cp "$ROOT/scripts/prepare-video-source.sh" "$work/"
   cd "$work"
 
-  PATH="$TEST_PATH" bash prepare-video-source.sh https://example.test/watch?v=abc123 sample-url >/tmp/prepare-video-source-url.out
+  PATH="$TEST_PATH" bash prepare-video-source.sh https://example.test/watch?v=abc123 sample-url >"$TMP_ROOT"/prepare-video-source-url.out
 
   assert_no_files ".raw/videos/sample-url/media/video.*"
   assert_file ".raw/videos/sample-url/audio.m4a"
   assert_file ".raw/videos/sample-url/frames/frame-001.jpg"
   assert_file ".raw/videos/sample-url/source.url"
   grep -q '"video": ""' ".raw/videos/sample-url/metadata.json" || fail "metadata video field should be empty"
+  grep -q 'caption' ".raw/videos/sample-url/transcript.md" || fail "manual subtitles should become transcript"
+  grep -q '"transcript_source": "manual-subtitles:en"' ".raw/videos/sample-url/metadata.json" || fail "manual subtitles should be preferred"
+  python3 -m json.tool ".raw/videos/sample-url/metadata.json" >/dev/null || fail "metadata should be valid JSON even with a quoted title"
+  [ ! -d ".raw/videos/sample-url/media" ] || fail "media dir should not be created"
+}
+
+# 回帰: 動画取得が失敗して字幕ファイルだけ残っても、字幕を動画と取り違えない。
+run_prepare_video_source_subtitle_is_not_video() {
+  local work="$TMP_ROOT/video-source-subonly"
+  mkdir -p "$work"
+  cp "$ROOT/scripts/prepare-video-source.sh" "$work/"
+  cd "$work"
+
+  FAKE_VIDEO_FAIL=1 PATH="$TEST_PATH" bash prepare-video-source.sh https://example.test/watch?v=abc123 sample-subonly >"$TMP_ROOT"/prepare-video-source-subonly.out 2>/dev/null
+
+  assert_no_files ".raw/videos/sample-subonly/audio.m4a"
+  assert_no_files ".raw/videos/sample-subonly/frames/frame-*.jpg"
+  assert_file ".raw/videos/sample-subonly/transcript.md"
+  grep -q '"download_status": "url-only"' ".raw/videos/sample-subonly/metadata.json" || fail "status should be url-only"
 }
 
 run_prepare_slide_media_local_video_does_not_save_video() {
@@ -117,7 +151,7 @@ run_prepare_slide_media_local_video_does_not_save_video() {
   cd "$work"
 
   printf 'fake video\n' > talk.mp4
-  PATH="$TEST_PATH" bash prepare-slide-media.sh slide-slug talk.mp4 >/tmp/prepare-slide-media.out
+  PATH="$TEST_PATH" bash prepare-slide-media.sh slide-slug talk.mp4 >"$TMP_ROOT"/prepare-slide-media.out
 
   assert_no_files ".raw/slides/slide-slug/media/*.mp4"
   assert_file ".raw/slides/slide-slug/media/audio.m4a"
@@ -129,7 +163,7 @@ run_prepare_slide_media_url_video_does_not_save_video() {
   cp "$ROOT/scripts/prepare-slide-media.sh" "$work/"
   cd "$work"
 
-  PATH="$TEST_PATH" bash prepare-slide-media.sh slide-url https://example.test/watch?v=abc123 >/tmp/prepare-slide-media-url.out
+  PATH="$TEST_PATH" bash prepare-slide-media.sh slide-url https://example.test/watch?v=abc123 >"$TMP_ROOT"/prepare-slide-media-url.out
 
   assert_no_files ".raw/slides/slide-url/media/*.mp4"
   assert_file ".raw/slides/slide-url/media/audio.m4a"
@@ -138,6 +172,7 @@ run_prepare_slide_media_url_video_does_not_save_video() {
 
 run_prepare_video_source_local_does_not_save_video
 run_prepare_video_source_url_does_not_save_video
+run_prepare_video_source_subtitle_is_not_video
 run_prepare_slide_media_local_video_does_not_save_video
 run_prepare_slide_media_url_video_does_not_save_video
 

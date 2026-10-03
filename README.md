@@ -9,9 +9,9 @@
 入れる:
 
 - 媒体別 ingest（論文・書籍・博士論文・スライド・動画）と、vault 側で分岐した `wiki-ingest` / `wiki-query` / `wiki-lint`
-- `wiki-survey` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate` / `wiki-ask-source` / `wiki-brief-source` / `wiki-related`
+- `wiki-survey` / `wiki-survey-recommend` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate` / `wiki-ask-source` / `wiki-brief-source` / `wiki-related`
 - 日本語整文（`japanese-tech-writing` と `conventions/japanese-style.md`）
-- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `wiki-related.py` / `wiki-clusters.py` / `concept-candidates.py` / `paper-ids.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py`）
+- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `wiki-related.py` / `wiki-clusters.py` / `concept-candidates.py` / `concept-resolve.py` / `paper-ids.py` / `paper-refs.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py` / `wiki-manifest.py` / `recompile-finalize.sh` / `wiki-survey-check.py` / `wiki-survey-recommend.py` / `address-backfill.py`）
 - 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
 - 読み取り専用の Obsidian プラグイン `wiki-lens`
 
@@ -26,7 +26,7 @@
 ## 前提
 
 - Obsidian 1.5 以降（`wiki-lens` はデスクトップ専用、WebGL が要る）
-- Python 3、`pdftotext`（poppler）、論文画像抽出には Node（pdf.js）
+- Python 3、`pdftotext`（poppler）、論文画像抽出には Node（pdf.js）、ベクター図のクロップには PyMuPDF（`uv run --with pymupdf`）
 - 並行書き込みには `flock`（macOS では util-linux の keg-only で入ることが多い）
 - エージェント runtime は Claude Code / Codex / Cursor など、Agent Skills を読めるもの
 
@@ -66,7 +66,7 @@ wiki/sources ──► wiki/entities
               ├── wiki/asks（既読 1 source の軽い Q&A。知識索引には入れない）
               ├── wiki/briefs（配布用紹介文。知識索引には入れない）
               ├── wiki/surveys
-              ├── wiki-ideate → research/ideas/（無いレイヤーなら承認後も /tmp）
+              ├── wiki-ideate → research/ideas/（無いレイヤーなら承認後も $TMPDIR）
               └── wiki-publish → notes/（任意）
 
 見る: wiki-lens（書かない）。開いているページの隣は `wiki-related`
@@ -82,6 +82,7 @@ wiki/sources ──► wiki/entities
 | 書籍 | `wiki-ingest-book`（1 章 = source 1） |
 | 博士・長編サーベイ | `wiki-ingest-thesis` |
 | スライド | `wiki-ingest-slides` |
+| 動画 | `wiki-ingest-video` |
 | 一般 URL | `wiki-ingest` |
 
 | 設問 | skill |
@@ -91,8 +92,9 @@ wiki/sources ──► wiki/entities
 | 既読 1 source の軽い確認・深掘り | `wiki-ask-source`（`wiki/asks/`） |
 | 既読 1 source の配布用紹介文 | `wiki-brief-source`（`wiki/briefs/`。旧名 `summarize-paper-note`） |
 | 1 つの命題の判定（支持 / 反対 / 機序） | `wiki-thesis`（`wiki/questions/`、`type: thesis`） |
+| サーベイのテーマが未定 | `wiki-survey-recommend`（候補の推薦だけ） |
 | 設計空間・文献地図・対象の像 | `wiki-survey` |
-| ギャップや閉じなかった命題からの着想 1 本 | `wiki-ideate`（承認後 `research/ideas/`。無いレイヤーなら `/tmp`） |
+| ギャップや閉じなかった命題からの着想 1 本 | `wiki-ideate`（承認後 `research/ideas/`。無いレイヤーなら `$TMPDIR`） |
 | wiki 外の読者へ | `wiki-publish` |
 
 ## 規約
@@ -103,7 +105,7 @@ wiki/sources ──► wiki/entities
 - [`conventions/japanese-style.md`](conventions/japanese-style.md) — 常体、カタカナ / 漢語 / 原語の寄せ方
 - [`conventions/token-discipline.md`](conventions/token-discipline.md) — resolve / excerpt / catalog / retrieve / context-pack
 
-関心の軸は任意の `profile.md`（`WIKI_PROFILE_PATH`、または `research/curation/profile.md` / `wiki/meta/profile.md`）を `wiki-profile.py` が要約する。無い vault では終了 3 になり、ingest / query は関心判定を飛ばす。
+関心の軸は任意の `profile.md`（`WIKI_PROFILE_PATH`、または `research/curation/profile.md` / `wiki/meta/profile.md`）を `wiki-profile.py` が要約する。query / survey の枠付けと survey のテーマ推薦が読む。concept の新設・保留の判断には使わない。無い vault では終了 3 になり、関心判定を飛ばす。
 
 既存ノートと共存させるときの原則（一次ノートを書き換えない、source に `@` を付ける）も conventions に残してある。別レイヤーが無い vault では、その節を読み飛ばしてよい。
 
@@ -162,7 +164,8 @@ python3 scripts/test_claim_audit.py
 python3 scripts/test_wiki_graph.py
 python3 scripts/test_wiki_claims.py
 python3 scripts/test_wiki_related.py
-python3 scripts/test_wiki_tokenize.py
+python3 scripts/test_wiki_cjk.py
+python3 scripts/test_bm25_index.py
 python3 scripts/test_wiki_clusters.py
 python3 scripts/test_usage_report.py
 python3 scripts/test_concept_candidates.py
@@ -170,6 +173,14 @@ python3 scripts/test_paper_ids.py
 python3 scripts/test_entity_resolve.py
 python3 scripts/test_wiki_profile.py
 python3 scripts/test_wiki_doctor.py
+python3 scripts/test_wiki_questions.py
+python3 scripts/test_wiki_manifest.py
+python3 scripts/test_concept_resolve.py
+python3 scripts/test_paper_refs.py
+python3 scripts/test_recompile_finalize.py
+python3 scripts/test_crop_paper_figures.py
+python3 scripts/test_wiki_survey_check.py
+python3 scripts/test_wiki_survey_recommend.py
 ```
 
 `wiki-lens` は `cd plugins/wiki-lens && npm test`。

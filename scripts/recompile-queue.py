@@ -50,6 +50,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
+from wiki_lock import page_lock
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 
@@ -91,6 +92,16 @@ def atomic_write(path, text):
         except OSError:
             pass
         raise
+
+
+def locked_queue(fn):
+    """読み込みから保存までをキューのロックで囲む。並行 mark の更新喪失を防ぐ。"""
+    def wrapper(*args, **kwargs):
+        with page_lock(QUEUE_REL):
+            return fn(*args, **kwargs)
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    return wrapper
 
 
 def today():
@@ -177,6 +188,7 @@ def page_recompiled_date(stats, path):
     return (str(rec) if rec and not isinstance(rec, list) else None), metrics
 
 
+@locked_queue
 def refresh(min_inbox, min_orphan_inbox):
     stats = load_stats_module()
     debt = {row["path"]: row for row in stats.scan_compile_debt(min_inbox, min_orphan_inbox)}
@@ -261,6 +273,7 @@ def next_candidates(entries, limit, include_blocked):
     return [public_entry(e, p) for p, e in rows[:limit]]
 
 
+@locked_queue
 def mark(page, state, reason, by, block_after):
     data = load_queue()
     path = normalize_page(page)
@@ -286,6 +299,7 @@ def mark(page, state, reason, by, block_after):
     return public_entry(entry, path), EXIT_OK
 
 
+@locked_queue
 def reopen(page):
     data = load_queue()
     path = normalize_page(page)

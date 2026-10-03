@@ -1,6 +1,6 @@
 {
 	"name": "wiki-lens",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Read-only visualization of the LLM wiki layer in this vault",
 	"main": "main.js",
 	"scripts": {

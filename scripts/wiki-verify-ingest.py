@@ -1066,7 +1066,8 @@ def check_figure_ids(raw_path, targets, report):
 # --------------------------------------------------------- 対象集合の解決
 
 def is_catalog(rel):
-    return rel in CATALOG_RELS or PurePosixPath(rel).name == "_index.md"
+    return (rel in CATALOG_RELS or PurePosixPath(rel).name == "_index.md"
+            or rel.startswith("wiki/log/"))
 
 
 def collect_targets(opts, report):

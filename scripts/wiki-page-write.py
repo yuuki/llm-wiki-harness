@@ -33,6 +33,7 @@ Write ツールで書き込み → `wiki-lock.sh release`」は Bash 3 回 + Wri
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -77,6 +78,17 @@ def log(msg):
     print(msg, file=sys.stderr)
 
 
+def concept_create_blocked(stem):
+    os.environ["WIKI_VAULT_ROOT"] = str(VAULT_ROOT)
+    spec = importlib.util.spec_from_file_location(
+        "concept_resolve", _SCRIPTS / "concept-resolve.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if not mod.is_create_blocked(stem):
+        return False, ""
+    return True, mod.create_block_reason(stem)
+
+
 def normalize_rel(raw):
     """vault 相対 posix パスを返す。vault 外・`..`・非 .md は None。"""
     if raw is None:
@@ -99,7 +111,7 @@ def normalize_rel(raw):
     parts = Path(rel).parts
     if not parts or parts[0] != "wiki":
         return None, "wiki/ 配下のパスだけを受け付ける: %s" % text
-    if rel in CATALOG_FILES or Path(rel).name == "_index.md":
+    if rel in CATALOG_FILES or Path(rel).name == "_index.md" or rel.startswith("wiki/log/"):
         return None, "%s はカタログである。%s" % (rel, CATALOG_HINT)
     # シンボリックリンクを辿った先が wiki/ の外なら、ロック層で 75 になる前に
     # パスエラーとして落とす(wiki-lock.sh の validate_path と同じ判定)。
@@ -414,6 +426,10 @@ def write_one(spec, opts):
             return {"path": rel,
                     "error": "既存ファイルがある(上書きするなら --force)",
                     "warnings": warnings}, EXIT_DATA
+        if (not exists) and rel.startswith("wiki/concepts/"):
+            blocked, why = concept_create_blocked(Path(rel).stem)
+            if blocked:
+                return {"path": rel, "error": why, "warnings": warnings}, EXIT_DATA
         action = "overwritten" if exists else "created"
         if exists and has_fm and frontmatter_address(text) is None and address is None:
             try:

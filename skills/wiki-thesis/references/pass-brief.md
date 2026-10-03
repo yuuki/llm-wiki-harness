@@ -1,6 +1,6 @@
 # 5 つの角度と subagent ブリーフ
 
-`wiki-thesis` skill の従属資料。角度の定義(§1)と、候補ページが 9 枚以上のときに角度ごとへ投入する Explore subagent のブリーフ雛形(§2)を置く。SKILL.md はここに書いた規則を書き写さない。
+`wiki-thesis` skill の従属資料。角度の定義(§1)と、候補ページが 9 枚以上のときに角度ごとへ投入する subagent のブリーフ雛形(§2)を置く。SKILL.md はここに書いた規則を書き写さない。
 
 ## 1. 角度の定義
 
@@ -64,8 +64,8 @@
 - ...
 
 読み方:
-- 各ページは `python3 scripts/wiki-excerpt.py <path> --tail 15 --budget-tokens 1800` で抜粋する。抜粋で足りないときだけ `--section "<節名>"` で広げる。全文 Read はしない。
-- (メイン文脈向け)読むページが 6 件を超えるときは、`python3 scripts/wiki-context-pack.py "<命題>" --no-retrieve --pages <ページ...> --budget-tokens 8000 --out /tmp/pack.md` で抜粋の束を 1 ファイルに作り、「読むページ」の代わりにその束を渡してよい。束の末尾の「省略」に挙がったページだけを subagent が個別に抜粋する。
+- 各ページは `python3 scripts/wiki-excerpt.py <path> --tail 15 --budget-tokens 1800` で抜粋する。抜粋で足りないときだけ `--sections "<節名>"` で広げる。全文 Read はしない。
+- (メイン文脈向け)読むページが 6 件を超えるときは、`python3 scripts/wiki-context-pack.py "<命題>" --no-retrieve --pages <ページ...> --budget-tokens 8000 --out "$TMPDIR/pack.md"` で抜粋の束を 1 ファイルに作り、「読むページ」の代わりにその束を渡してよい。束の末尾の「省略」に挙がったページだけを subagent が個別に抜粋する。
 - wiki/index.md、_index.md、wiki/log.md、wiki/hot.md は読まない。
 - 担当ページに書かれていないことは推測せず「記載なし」と明記する。訓練データで穴を埋めない。
 

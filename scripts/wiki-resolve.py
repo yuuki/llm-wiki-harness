@@ -23,6 +23,8 @@ Stdout:
   --compact    — one TSV line per query:
                  <query>\\t<type>\\t<HIT|NONE>\\t<path>(<match> <score>); ...
                  paths are relative to wiki/; default --top drops to 3
+                 concept HIT is lookup_one only: <path>(via=page|merged|alias).
+                 concept NONE with dialect_gate is dialect-gate:<n> pages.
   Concept-candidate ledger hint: when a concept/any query has NO page hit but the
   name (or an alias) is in `.vault-meta/concept-candidates.json`, JSON gains
   `candidate_ledger: {name, state, source_count, ready}` and the compact 4th
@@ -37,6 +39,7 @@ Exit codes:
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -86,12 +89,6 @@ def log(msg):
 def err(msg):
     """Usage/failure line; printed even under --quiet."""
     print(msg, file=sys.stderr)
-
-
-def reset_caches():
-    _LISTDIR_CACHE.clear()
-    _FOLDED_CACHE.clear()
-    _LEDGER_CACHE.clear()
 
 
 def unquote(value):
@@ -510,8 +507,74 @@ def sort_candidates(rows):
     return sorted(rows, key=key)
 
 
+_CR_MOD = None
+
+
+def concept_resolve():
+    global _CR_MOD
+    os.environ["WIKI_VAULT_ROOT"] = str(VAULT_ROOT)
+    if _CR_MOD is None:
+        spec = importlib.util.spec_from_file_location(
+            "concept_resolve", SCRIPT_DIR / "concept-resolve.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CR_MOD = mod
+    return _CR_MOD
+
+
+def reset_caches():
+    _LISTDIR_CACHE.clear()
+    _FOLDED_CACHE.clear()
+    _LEDGER_CACHE.clear()
+    global _CR_MOD
+    _CR_MOD = None
+
+
+def concept_candidate(hit, enrich):
+    rel = hit["path"]
+    rec = {
+        "path": rel,
+        "title": hit.get("title") or Path(rel).stem,
+        "type": "concept",
+        "match": hit.get("via") or "page",
+        "score": 1.0,
+        "aliases": list(hit.get("aliases") or []),
+        "one_liner": "",
+    }
+    if enrich:
+        enrich_kept([rec])
+    return rec
+
+
+def resolve_concept_lookup(name, enrich):
+    cr = concept_resolve()
+    hit = cr.lookup_one(name)
+    extra = {"dialect_gate": hit.get("dialect_gate")}
+    if hit.get("status") == "HIT" and hit.get("path"):
+        return [concept_candidate(hit, enrich)], extra
+    return [], extra
+
+
 def resolve_one(name, type_key, alias_index, top, min_score, use_bm25, enrich):
+    extra = {}
+    if type_key == "concept":
+        rows, extra = resolve_concept_lookup(name, enrich)
+        return rows[:top], extra
     store = {}
+    if type_key == "any":
+        stage_filename(store, name, "entity")
+        stage_filename(store, name, "source")
+        stage_alias(store, name, "entity", alias_index)
+        stage_alias(store, name, "source", alias_index)
+        if use_bm25:
+            stage_bm25(store, name, "entity", top)
+            stage_bm25(store, name, "source", top)
+        c_rows, extra = resolve_concept_lookup(name, enrich)
+        rows = [rec for rec in store.values() if float(rec.get("score", 0)) >= min_score]
+        ranked = sort_candidates(rows + c_rows)[:top]
+        if enrich:
+            enrich_kept([r for r in ranked if r.get("type") != "concept"])
+        return ranked, extra
     stage_filename(store, name, type_key)
     stage_alias(store, name, type_key, alias_index)
     if use_bm25:
@@ -520,7 +583,7 @@ def resolve_one(name, type_key, alias_index, top, min_score, use_bm25, enrich):
     ranked = sort_candidates(rows)[:top]
     if enrich:
         enrich_kept(ranked)
-    return ranked
+    return ranked, extra
 
 
 def _is_comment_or_blank(raw):
@@ -619,13 +682,23 @@ def ledger_hint(name, type_key):
 def compact_line(result):
     cands = result["candidates"]
     head = f"{one_line(result['query'])}\t{result['type']}\t{'HIT' if cands else 'NONE'}\t"
-    if not cands and result.get("candidate_ledger"):
+    if cands:
+        parts = []
+        for rec in cands:
+            if rec.get("type") == "concept" and rec.get("match") in ("page", "merged", "alias"):
+                parts.append(f"{short_path(rec['path'])}(via={rec['match']})")
+            else:
+                parts.append(
+                    f"{short_path(rec['path'])}({rec['match']} {float(rec.get('score', 0)):.2f})"
+                )
+        return head + "; ".join(parts)
+    gate = (result.get("dialect_gate") or {}).get("pages") or []
+    if gate:
+        return head + f"dialect-gate:{len(gate)} pages"
+    if result.get("candidate_ledger"):
         h = result["candidate_ledger"]
         return head + f"ledger:{one_line(h['name'])}({h['source_count']} docs, {h['state']})"
-    return head + "; ".join(
-        f"{short_path(rec['path'])}({rec['match']} {float(rec.get('score', 0)):.2f})"
-        for rec in cands
-    )
+    return head
 
 
 def render_paths_only(results):
@@ -678,17 +751,24 @@ def main(argv=None):
         use_bm25 = False
 
     enrich = not (args.compact or args.paths_only)
-    alias_index = build_alias_index([name for name, _ in queries], [typ for _, typ in queries])
+    type_keys = [typ for _, typ in queries]
+    if all(t == "concept" for t in type_keys):
+        alias_index = []
+    else:
+        alias_index = build_alias_index([name for name, _ in queries], type_keys)
 
     results = []
     for name, type_key in queries:
+        rows, extra = resolve_one(
+            name, type_key, alias_index, top, args.min_score, use_bm25, enrich
+        )
         result = {
             "query": name,
             "type": type_key,
-            "candidates": resolve_one(
-                name, type_key, alias_index, top, args.min_score, use_bm25, enrich
-            ),
+            "candidates": rows,
         }
+        if extra.get("dialect_gate"):
+            result["dialect_gate"] = extra["dialect_gate"]
         if not result["candidates"]:
             hint = ledger_hint(name, type_key)
             if hint:

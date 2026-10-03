@@ -76,7 +76,8 @@ ls wiki/sources/_attachments/<slug>/
 (Source: [[@YYYY__SOURCE__Title]], 図 N)
 ```
 
-- 図番号 `図N-M` は「章番号 - 章内の出現順」。表は `表N-M`。
+- 図番号 `図N-M` は「章番号 - 章内の出現順」。表は `表N-M`。図と表を別系列で数えても(図3-1、図3-2、表3-1)、出現順の 1 系列で数えても(表3-1、図3-2)よいが、1 ページの中で混ぜない。
+- キャプションは一文一行で複数行になってよい。出典行は同じ段落(空行を挟まない)の中に置く。
 - キャプションの後半で**本文との対応を必ず書く**。「〜という本文の指摘はこの並びに対応する」「〜という数値はこの一致度である」のように、読者が本文へ戻れるようにする。図の説明だけで終わらせない。
 - 出典行には**原本の図表番号**を付ける。
   - 論文: `図 N`、`表 N`。部分図は `図 3(a)`、複数図の統合は `図 1–3`。
@@ -89,12 +90,13 @@ ls wiki/sources/_attachments/<slug>/
 対象そのものの構造を説明する図は自作してよい。保存先と書式が転載図と異なる。
 
 ```markdown
-![[Attachments/<ページ名>/figure-NN-<slug>.png|900]]
+![[wiki/surveys/_attachments/<ページ名>/figure-NN-<slug>.png|900]]
 
 図 N <何が描かれているか>。<設計上の含意>。
 ```
 
-- 保存先は `Attachments/<ページ名>/`(vault ルート直下の `Attachments/`、`wiki/sources/_attachments/` ではない)。
+- 保存先は `wiki/surveys/_attachments/<ページ名>/`。vault 直下の `Attachments/` や `wiki/sources/_attachments/` には置かない。
+- 埋め込みは vault からのフルパス(`wiki/surveys/_attachments/...`)で書く。`_attachments/` で始めると `wiki-survey-check.py` が転載図とみなし、`wiki/sources/` 配下を探して FAIL になる。
 - ファイル名は `figure-NN-<英小文字ハイフン>.png`。
 - 幅は `|900` を指定する。
 - キャプションは太字番号を使わず「図 N 」で始める(転載図と書式を分け、自作か転載かが見て分かるようにする)。
@@ -107,21 +109,15 @@ ls wiki/sources/_attachments/<slug>/
 挿入した全件を確認する。`SKILL.md` のフェーズ 5 で release する前、またはフェーズ 6 の検証の一部として実行する。
 
 ```bash
-# 埋め込みパスを抽出して実ファイルの存在を確認する
-rg -o '!\[\[[^]|]*' "wiki/surveys/<タイトル>.md" | sed 's/^!\[\[//' | while read -r p; do
-  case "$p" in
-    _attachments/*) f="wiki/sources/$p" ;;
-    *) f="$p" ;;
-  esac
-  [ -f "$f" ] || echo "MISSING: $p"
-done
+python3 scripts/wiki-survey-check.py check "wiki/surveys/<タイトル>.md" --only images,figures --max-locations -1
 ```
 
-欠損 0 件が保存の条件である。あわせて次を確認する。
+`images` は埋め込みパスの実ファイル存在(`_attachments/` は `wiki/sources/` 配下、それ以外は vault 直下)を見る。欠損 0 件が保存の条件である。`figures` は次を見る。
 
-- 図番号が章内で連番になっているか(欠番と重複が無いか)。
-- 全キャプションに本文との対応が書かれているか。
-- 全出典行に原本の図表番号が付いているか。
+- FAIL: 章内の図番号の重複と欠番。同じ画像の二重貼付(§2 の「章をまたいで同じ図を 2 度貼らない」)。
+- WARN: 転載図の直後にキャプションが無い。キャプションの段落に出典行が無い、または出典行に原本の図表番号(図 N / p.N / frame-NNN)が無い。自作画像にキャプションが無い(章扉絵として置いたなら許容し、log に書く)。
+
+機械検査に載らない項目は手で見る。**全キャプションの後半に本文との対応が書かれているか**(§4)。
 
 ---
 

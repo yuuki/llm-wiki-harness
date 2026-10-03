@@ -65,7 +65,7 @@ Write `wiki/meta/gap-report-YYYY-MM-DD.md` (frontmatter mirrors the lint reports
 4. **未検証の推薦** — anything Step 4 could not confirm.
 5. **Coverage notes** — carried over from the plugin report.
 
-Then `wiki-catalog.py prepend-log` in the existing format (`## [YYYY-MM-DD] gap-analysis | <short title>` with Source / Pages created / Key insight lines). Do not Read/Edit `wiki/log.md`. Commit per vault convention: `wiki: add gap report YYYY-MM-DD`.
+Then `wiki-catalog.py prepend-log` in the existing format (`## [YYYY-MM-DD] gap-analysis | <short title>` with Source / Pages created / Key insight lines). Do not Read/Edit `wiki/log.md`. Commit per vault convention: `wiki: add gap report YYYY-MM-DD`, limited to the report and `wiki/log.md` (`git commit -m "..." -- <paths>`, wiki/CLAUDE.md rule 8).
 
 ## Boundaries
 

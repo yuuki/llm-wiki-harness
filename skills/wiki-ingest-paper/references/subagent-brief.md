@@ -2,13 +2,13 @@
 
 `wiki-ingest-paper` の従属資料。バッチ並行の 1 論文担当 subagent が読む**唯一の手順書**である。オーケストレータはフル SKILL を渡さない。索引・commit・バッチ全体の catalog 更新は書かない。
 
-あなたは Obsidian vault（作業ディレクトリ = vault ルート）で、論文 1 本の wiki 取り込みを担当する。
+あなたは Obsidian vault(オーケストレータが個別プロンプトで渡す vault ルートの絶対パス)で、論文 1 本の wiki 取り込みを担当する。
 
 ## 必読
 
 - `wiki/meta/conventions.md`
 - `wiki/meta/japanese-style.md`
-- ベクター図のクロップは [`figures.md`](figures.md)
+- ベクター図のクロップは [`figures.md`](figures.md)。`scripts/crop-paper-figures.py` を使い、ページ全幅の手クリップはしない
 
 本文は日本語・常体。
 
@@ -17,7 +17,7 @@
 毎回 vault ルートから実行する。`cd` だけの呼び出しは禁止。必ず実処理を同じ呼び出しに置く。
 
 ```bash
-cd "$VAULT_ROOT" && ...
+cd <vault ルートの絶対パス> && ...
 ```
 
 ## 原本取得
@@ -27,6 +27,8 @@ bash scripts/fetch-paper-pdf.sh "<arxiv-url|id|pdf-url|local-pdf>"
 ```
 
 fetch が `page-*.png` の掃除まで行う。手で `find` / `python -c` しない。保持されるのは `image-*.png` と `images.json` だけ。`scripts/allocate-address.sh` は直接実行しない(採番は `wiki-page-write.py` の内側)。
+
+fetch の出力の `existing_sources=` が空でなければ、その論文は既に wiki にある。新しい source ページを作らず、挙がった既存ページを更新する(本文の追記、図表の補完、`updated:` の更新。address は再採番しない)。完了報告に `Existing: <既存ページ>` を書く。
 
 `pages=` が 30 以上かつ章相当の節構造、または博士/修士論文なら、このセッションでは続けない。`fetch-book.sh` を呼ばない。章ページを書かない。報告は `Deferred: wiki-ingest-thesis を新セッションで`。
 
@@ -44,7 +46,7 @@ python3 scripts/wiki-verify-ingest.py --list-figure-ids ".raw/papers/<slug>.txt"
 python3 scripts/contact-sheet.py --manifest ".raw/papers/<slug>/images/images.json" --out "$TMPDIR/cs-<slug>" --index-txt
 ```
 
-**個別 Read の前に**シートを Read する。`image-*.png` / attachment をシート無しで Read してはならない。シートと `index.txt` で番号が付いたファイルは Read しない。クロップ結果も位置が疑わしいときだけ。`individual-reads` は `sheet-*.png` を除く画像 Read の実数。シート 0 枚なら個別 Read も 0。回数 1 はキャプションのみ候補として目視する。ベクターは [`figures.md`](figures.md) のクロップ。「## 図表」セクションは作らない。埋め込みは該当記述の直後。
+**個別 Read の前に**シートを Read する。`image-*.png` / attachment をシート無しで Read してはならない。シートと `index.txt` で番号が付いたファイルは Read しない。クロップ結果も位置が疑わしいときだけ。`individual-reads` は `sheet-*.png` を除く画像 Read の実数。シート 0 枚なら個別 Read も 0。回数 1 はキャプションのみ候補として目視する。ベクターは [`figures.md`](figures.md) のヘルパーでクロップする。`review: true` または位置が疑わしい結果だけ Read する。「## 図表」セクションは作らない。埋め込みは該当記述の直後。
 
 除外(これ以外は本文参照分をすべて取り込む):
 
@@ -54,7 +56,7 @@ python3 scripts/contact-sheet.py --manifest ".raw/papers/<slug>/images/images.js
 - 付録のみ参照(本文主張に直結するなら含めてよい)
 - ほぼ同一構図の繰り返し(代表 1〜2 点。省略数は報告に書く)
 
-attachment は `wiki/sources/_attachments/<slug>/figNN-....png`。ファイル名に `token`・`secret`・`password`・`credential`・`key` を含めない。
+attachment は `wiki/sources/_attachments/<slug>/figNN-....png`。
 
 ## source ページ
 
@@ -62,10 +64,15 @@ attachment は `wiki/sources/_attachments/<slug>/figNN-....png`。ファイル�
 
 frontmatter: `address:`(ヘルパー採番)、日付タグ先頭、`type: source`、`source_type: paper`、`sources` に PDF / txt / `images.json`。
 
-**abstract は全文和訳**(一文ずつ忠実。原文を要約・補完しない)。
+**raw の Abstract は本文先頭を `> [!abstract] 概要` callout にして全文和訳する**(一文ずつ忠実。原文を要約・補完しない)。タイトルは `概要` のみ。括弧書きの補足は付けない。`## Abstract` は作らない。`## 概要` は wiki 側の 2-3 文要約であり、論文 Abstract の置き場ではない。
+
+本文の先頭行に H1 を 1 つだけ置く(frontmatter の `title` と同じ文字列)。H1 が無いと `wiki-page-write.py` が拒否する。
 
 ```markdown
-> [!abstract] 概要(abstract の日本語訳)
+# {frontmatter の title と同じ文字列}
+
+> [!abstract] 概要
+> {raw の Abstract を一文ずつ忠実に和訳}
 
 ## 論文情報
 ## 概要
@@ -88,7 +95,25 @@ frontmatter: `address:`(ヘルパー採番)、日付タグ先頭、`type: source
 
 ## concept
 
-追記は `wiki-append.py` だけ。対象は `## 未編纂の観察` と `## 未解決の問い`。**主題節を書き換えない。** **単一ソース事実は受信箱に書かない。** 単一論文で閉じる用語は source に留める。**新規最大 3 / 更新最大 5。** 溢れたら log 用に `Deferred:` を報告する。**ハブ concept は子へ書く**(ハブへは子へのリンクと子をまたぐ観察だけ)。矛盾は `> [!contradiction]`。`- 概念:` は下のテーマ塊手順に従う。
+追記は `wiki-append.py` だけ。対象は `## 未編纂の観察` と `## 未解決の問い`。**主題節を書き換えない。** 問い節には問いか未解決点だけを書き、出典付きの断定は受信箱へ書く。規約外の節(`## 未解決の問い（追記）` など)を作らない。**単一ソース事実は受信箱に書かない。** 単一論文で閉じる用語は source に留める。**新規最大 3 / 更新最大 5。** 溢れたら log 用に `Deferred:` を報告する。resolve が `NONE` かつ `dialect-gate:` を返した候補は新設しない(観察は source に留め、`concept-candidates.py add --reason "dialect-gate"` で台帳に積む)。`ledger:` が `ready` の候補を新設してよいのは、`dialect-gate:` が無く `is_create_blocked` でもないときだけである。**ハブ concept は子へ書く**(ハブへは子へのリンクと子をまたぐ観察だけ)。矛盾は `> [!contradiction]`。`- 概念:` は下のテーマ塊手順に従う。
+
+## 数値の照合
+
+観察と source ページに、出典に無い数値や帰属の取り違えが混じる(32 GPU と書いたが原文は 64 GPU、節番号の取り違え)。書いた数値は記憶ではなく抽出テキストから写し、書いたあと機械照合する。
+
+```bash
+# source ページを書いた直後。本文と key_claims の数値を自分の raw 抽出テキストに照らす
+python3 scripts/claim-audit.py numbers --source-page "wiki/sources/@YYYY__SOURCE__Title.md"
+# concept への追記の前。append の spec を先にファイルへ書き、観察と問いの数値を、その行が引く出典に照らす
+python3 scripts/claim-audit.py numbers --spec "$TMPDIR/appends-<slug>.json"
+```
+
+- 終了 1 は `missing`(ページにも raw にも無い数値)がある印。1 件ずつ `rg -n -C2 '<数値か英語の語>' ".raw/papers/<slug>.txt" | head -20` で原文を引き、原文の値に直すか、その数値を消す。PDF は開かない。txt を全文 Read しない。
+- 観察が既存 source B の数値を述べるなら、その行に B の wikilink が要る(照合は行が引く出典だけに照らす)。B の raw も同じく `rg` で確かめる。
+- 和・比・差のように自分で導いた値は、導出と分かる書き方にする(「34.72% と 24.72% の和で 59.44%」)。機械照合は導出値を拾えないので、報告に件数を書く。
+- `caption_missing` は図から読んだ数値で、抽出テキストに無いのが普通である。図を読み直すためだけに画像を Read しない。
+- 節番号・章番号・帰属(誰が・どの手法が・どの規模で)は機械照合が弱い。書くときに `rg -n '^ *<N.M> ' ".raw/papers/<slug>.txt"` で節見出しを確かめてから書く。
+- 完了報告に `numbers: source missing=N→0 / spec missing=M→0(残りは導出値 K)` を書く。
 
 ## テーマ塊
 
@@ -104,11 +129,30 @@ frontmatter: `address:`(ヘルパー採番)、日付タグ先頭、`type: source
 6. 1 ページの `- 概念:` は既存込み最大 5、うち塊由来は最大 3。この 3 は concept 新規 3 / 更新 5 の枠を消費しない
 7. 新規は `wiki-page-write.py` 初回本文の `## 関連` 行 `- 概念: [[...]] / [[...]]`。更新は同じ append batch の `related.概念`。別 Edit を増やさない
 
-未構築のまま / 既存 concept 0 / 全て `on_backbone: false` / 接するハブ 0 なら、今どおり resolve 結果だけを related にする。JSON を開けて補完してはならない。
+未構築のまま / 既存 concept 0 / 全て `on_backbone: false` / 接するハブ 0 なら、resolve 結果だけを related にする。JSON を開けて補完してはならない。
 
 ## 触ってはいけないファイル
 
 `wiki/index.md`、各 `_index.md`、`hot.md`、`log.md`、`overview.md`、`.raw/.manifest.json`。**catalog を subagent が書かない。** **`papers/` `research/` `structures/` `notes/` を書き換えない。**
+
+## 文献候補
+
+source を書いたあと、catalog の前(このセッションでは catalog は書かない)にこの順で呼ぶ。
+
+```bash
+python3 scripts/paper-refs.py extract --source "@YYYY__SOURCE__Title"
+python3 scripts/paper-refs.py mark-ingested --page "wiki/sources/@YYYY__SOURCE__Title.md"
+```
+
+| 終了 | 振る舞い |
+|---|---|
+| 0 | 完了報告に `Ref-candidates: mentions=+N ready=M`(stdout の `mentions_added` / `ready`) |
+| 3 | `Ref-candidates: skipped missing` で続行 |
+| 75 | 2 秒待って同じコマンドを 1 回だけ再試行。なお 75 なら `Ref-candidates: skipped lock` で続行 |
+| 1 | 壊れた台帳。ingest を止めて報告。空台帳で上書きしない |
+| 2 | 呼び間違い。止める |
+
+`Deferred:` に文献 ID も題名も書かない。候補を ingest しない。`extract` は本文の `[N]` から役割も書く。対比は直前窓の定型句である。ready は変えない。
 
 ## verify
 
@@ -117,10 +161,11 @@ python3 scripts/wiki-verify-ingest.py --pages "wiki/sources/@YYYY__SOURCE__Title
   --attachments-slug <slug> --figure-ids-from ".raw/papers/<slug>.txt"
 ```
 
+`FIG-MISSING` は `scripts/crop-paper-figures.py` で足す。ページ全幅の手クリップはしない。
 ## git
 
 `git add` / `git commit` / `git stash` / `git checkout` 禁止。確認の `git status` / `git diff` のみ。
 
 ## 完了報告
 
-作成・更新したページ(すべて) / 一行の key insight / 気づいた矛盾 / 図表の総数と除外理由 / Deferred / `contact-sheet: N sheets / individual-reads: K`(K はシートを除く画像 Read の実数)。「これから〜する」で終えない。
+作成・更新したページ(すべて) / 一行の key insight / 気づいた矛盾 / 図表の総数と除外理由 / Deferred / `contact-sheet: N sheets / individual-reads: K`(K はシートを除く画像 Read の実数) / `numbers: source missing=N→0 / spec missing=M→0(残りは導出値 K)`。「これから〜する」で終えない。

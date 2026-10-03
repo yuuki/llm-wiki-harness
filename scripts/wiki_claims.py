@@ -32,6 +32,8 @@ def _load_stats():
 
 STATS = _load_stats()
 
+from wiki_sections import KIND_INBOX, KIND_TOPIC, is_placeholder_bullet, section_kind  # noqa: E402
+
 
 def link_basename(target):
     """wiki-graph.link_basename と同じ規則。こちらから wiki-graph は import しない。"""
@@ -53,7 +55,60 @@ def claim_id(page_rel, text):
 
 
 def source_names(text):
-    return [t.strip() for t in WIKILINK_RE.findall(text) if t.strip().startswith("@")]
+    """@ 付き source ページ名。パス付きの形(`[[wiki/sources/@X]]`)もファイル名だけの形と同じに扱う。"""
+    out = []
+    for t in WIKILINK_RE.findall(text):
+        base = link_basename(t)
+        if base and base.startswith("@"):
+            out.append(base)
+    return out
+
+
+HUB_ENTITY_TYPES = ("thesis", "survey", "book")
+
+
+def classify_evidence_link(target):
+    """根拠行の非 @ リンクを分類する。
+
+    source: `wiki/sources/<name>.md` が実在する(@ 無しの記事・ブログ等)
+    hub: `wiki/entities/<name>.md` が博士論文・サーベイ・書籍のハブ entity
+    None: それ以外(concept や人物など。出典として扱わない)
+    """
+    base = link_basename(target)
+    if not base or base.startswith("@"):
+        return None, base
+    if (VAULT_ROOT / "wiki" / "sources" / f"{base}.md").is_file():
+        return "source", base
+    entity = VAULT_ROOT / "wiki" / "entities" / f"{base}.md"
+    if entity.is_file():
+        try:
+            head = entity.read_text(encoding="utf-8")[:2000]
+        except OSError:
+            return None, base
+        fm, _ = STATS.split_frontmatter(head if head.count("---") >= 2 else "")
+        if str(fm.get("entity_type", "")).strip().strip('"') in HUB_ENTITY_TYPES:
+            return "hub", base
+    return None, base
+
+
+def evidence_names(text):
+    """根拠行から (sources, hubs, other_links) を返す。sources は @ ページと @ 無し source ページ。"""
+    sources, hubs, others = [], [], []
+    for t in WIKILINK_RE.findall(text):
+        t = t.strip()
+        base = link_basename(t)
+        if base and base.startswith("@"):
+            # `[[wiki/sources/@X]]` のようなパス付きの形も `[[@X]]` と同じ出典として数える
+            sources.append(base)
+            continue
+        kind, base = classify_evidence_link(t)
+        if kind == "source":
+            sources.append(base)
+        elif kind == "hub":
+            hubs.append(base)
+        elif base:
+            others.append(base)
+    return sources, hubs, others
 
 
 def claim_targets(claim_text):
@@ -65,6 +120,14 @@ def claim_targets(claim_text):
             continue
         if base not in out:
             out.append(base)
+    return out
+
+
+def _dedup(items):
+    out = []
+    for item in items:
+        if item not in out:
+            out.append(item)
     return out
 
 
@@ -80,8 +143,10 @@ def extract_claims(page_rel, include_inbox=False, text=None):
     fm_lines = len(text.splitlines()) - len(body.splitlines())
     claims = []
     for heading, block in STATS.h2_sections(body):
-        is_inbox = heading in (STATS.INBOX_HEADING, STATS.LEGACY_INBOX_HEADING)
-        if heading in STATS.FIXED_HEADINGS and not (is_inbox and include_inbox):
+        # 節の分類は wiki-concept-stats と同じ(wiki_sections)。`## 参照` のような参照一覧の節は主題節ではない
+        kind = section_kind(heading)
+        is_inbox = kind == KIND_INBOX
+        if kind != KIND_TOPIC and not (is_inbox and include_inbox):
             continue
         block_start = body.find(block)
         line_base = body[:block_start].count("\n") + fm_lines + 1
@@ -91,12 +156,16 @@ def extract_claims(page_rel, include_inbox=False, text=None):
             line = lines[i]
             if is_inbox:
                 m = TOP_BULLET_RE.match(line)
-                if m and source_names(line):
+                if m and is_placeholder_bullet(line):
+                    m = None
+                # 観察も根拠行と同じく、@ の付かない source ページとハブ entity を出典として拾う
+                obs_sources, obs_hubs, _ = evidence_names(line) if m else ([], [], [])
+                if m and (obs_sources or obs_hubs):
                     claims.append({
                         "kind": "observation", "page": page_rel, "section": heading,
                         "line": line_base + i, "claim": m.group(1).strip(),
-                        "sources": source_names(line), "evidence_lines": [],
-                        "targets": [],
+                        "sources": _dedup(obs_sources), "hubs": _dedup(obs_hubs),
+                        "evidence_lines": [], "targets": [],
                     })
                 i += 1
                 continue
@@ -106,6 +175,8 @@ def extract_claims(page_rel, include_inbox=False, text=None):
                 continue
             claim_text = m.group(1).strip()
             sources = source_names(line)
+            hubs, unresolved = [], []
+            has_grounds = False
             evidence_lines = []
             j = i + 1
             while j < len(lines) and (lines[j].startswith("  ") or lines[j].strip() == ""):
@@ -113,17 +184,21 @@ def extract_claims(page_rel, include_inbox=False, text=None):
                 if ev:
                     evidence_lines.append(lines[j].strip())
                     if ev.group(1) in ("根拠", "反証"):
-                        sources.extend(source_names(lines[j]))
+                        has_grounds = True
+                        s_names, h_names, o_names = evidence_names(lines[j])
+                        sources.extend(s_names)
+                        hubs.extend(h_names)
+                        unresolved.extend(o_names)
                 j += 1
-            if sources:
-                dedup = []
-                for s in sources:
-                    if s not in dedup:
-                        dedup.append(s)
+            if sources or hubs or has_grounds:
+                # 根拠行があるのに検証可能な出典が 1 つも無い命題も落とさない(unverifiable として出す)
                 claims.append({
                     "kind": "proposition", "page": page_rel, "section": heading,
                     "line": line_base + i, "claim": claim_text,
-                    "sources": dedup, "evidence_lines": evidence_lines,
+                    "sources": _dedup(sources), "hubs": _dedup(hubs),
+                    "unresolved_links": _dedup(unresolved),
+                    "unverifiable": not sources and not hubs,
+                    "evidence_lines": evidence_lines,
                     "targets": claim_targets(claim_text),
                 })
             i = j

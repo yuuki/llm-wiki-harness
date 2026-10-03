@@ -1,6 +1,6 @@
 ---
 name: wiki-query
-description: "Answer questions using the Obsidian wiki vault. Retrieve-first: never read index.md, _index.md, log.md, or full hot.md (except the trimmed hot window in quick mode). Synthesizes answers with citations. Files good answers back as wiki pages. Supports quick, standard, and deep modes. Triggers on: what do you know about, query:, what is, explain, find in wiki, search the wiki, based on the wiki, wiki query quick, wiki query deep. 単一 source を Slack 等へ貼る紹介文や、配布意図のある「この論文を要約して」は wiki-brief-source。wiki 横断の「何が分かっているか」だけを本 skill で扱う。"
+description: "Answer a single question from the Obsidian wiki with citations: a synthesis across pages, a deep explanation of one source, or the difference between two things. Retrieve-first (`retrieve.py`, then excerpts; never index.md, _index.md, log.md or the full hot.md). Standard and deep answers are filed back to `wiki/questions/`; quick mode is not. Triggers on: what do you know about, query:, what is, explain, find in wiki, based on the wiki, wiki query quick, wiki query deep. 単一 source を Slack 等へ貼る紹介文や、配布意図のある「この論文を要約して」は wiki-brief-source、渡された 1 source への軽い確認は wiki-ask-source、開いているページの隣は wiki-related、命題の判定は wiki-thesis、長編編纂は wiki-survey。"
 allowed-tools: Read Glob Grep Bash
 ---
 
@@ -10,25 +10,15 @@ The wiki has already done the synthesis work. Read strategically, answer precise
 
 単一 source の配布用紹介文(Slack に貼る箇条書き、「この論文を要約して」で共有したいとき)は `wiki-brief-source` に渡し、本 skill では答えない。`wiki/questions/` にも保存しない。
 
+渡された 1 source への軽い確認(「ここが分からない」)は `wiki-ask-source` に渡す。単一 source でも、引用付きの深掘り解説を求める問いは本 skill で扱う(wiki/CLAUDE.md の判断基準)。
+
 今見ているページの隣・関連・配役は `wiki-related` に渡す。種が問い文なら本 skill、種がページパスなら `wiki-related` である。`retrieve.py` で隣を作るな。
 
 ---
 
-## Transport (v1.7+)
+## Retrieval
 
-Reads should prefer the same transport the rest of the plugin uses. Consult `.vault-meta/transport.json` (auto-created by `bash scripts/detect-transport.sh`) and use the `preferred` entry:
-
-- **cli** — `obsidian-cli read "$VAULT" "$NOTE"` and `obsidian-cli search "$VAULT" "<query>"` (Obsidian-native ranking); see [`skills/wiki-cli/SKILL.md`](../wiki-cli/SKILL.md)
-- **mcp-obsidian** / **mcpvault** — `mcp__obsidian-vault__read_note`, `search_notes`; see [`skills/wiki/references/mcp-setup.md`](../wiki/references/mcp-setup.md)
-- **filesystem** — Claude's `Read` and `Glob`/`Grep` tools (final floor; always works)
-
-Full decision tree: [`wiki/references/transport-fallback.md`](../../wiki/references/transport-fallback.md). Quick mode (hot.md only) is transport-agnostic — always uses `Read`.
-
----
-
-## Retrieval (v1.7+)
-
-Standard and Deep modes start with `retrieve.py`, then excerpt — never `wiki/index.md`. Canonical policy: [`wiki/meta/token-discipline.md`](../../wiki/meta/token-discipline.md).
+Standard and Deep modes start with `retrieve.py`, then excerpt — never `wiki/index.md`. Canonical policy: [`wiki/meta/token-discipline.md`](../../../wiki/meta/token-discipline.md).
 
 ```bash
 python3 scripts/retrieve.py "<the user's question verbatim>" --top 5   # Deep: --top 10
@@ -73,7 +63,7 @@ Use when the answer is likely in the recent hot cache. `wiki/hot.md` is maintain
 
 1. Read the current `wiki/hot.md` (a script-trimmed window of ≤2,000 tokens / 5 entries).
 2. If it answers the question, respond immediately.
-3. If not found, say "Not in quick cache. Run as standard query?" — do **not** Read `wiki/index.md`.
+3. If not found, say in Japanese that the quick cache does not have it and offer a standard query — do **not** Read `wiki/index.md`.
 
 Do not open individual wiki pages in quick mode.
 
@@ -87,7 +77,7 @@ Do not open individual wiki pages in quick mode.
 4. Follow wikilinks from excerpts to depth-2 for key entities (excerpt those too). No deeper.
 5. **Synthesize** the answer in chat. Cite sources with wikilinks: `(Source: [[Page Name]])`.
 6. **File by default** (save-first). A standard answer that synthesises two or more pages is saved to `wiki/questions/` without asking (see *Filing Answers Back*). Skip the save only when: the user said not to, the answer is a bare fact lookup, the answer is "not in the wiki" (go to Gap Handling), one existing page already answers it verbatim (then link that page instead of duplicating), **or the request is a single-source Slack/配布紹介文** (hand to `wiki-brief-source`; do not file here). Say in one line where it was filed.
-7. If the question reveals a **gap**: say "I don't have enough on X. Want to find a source?"
+7. If the question reveals a **gap**: name the missing subtopic in Japanese and offer to find a source.
 
 ---
 
@@ -111,7 +101,7 @@ Do not route back. If `wiki-survey` finds the population too thin, its own gate 
 
 ## Token Discipline
 
-Read the minimum needed. Never Read catalog files (`index.md`, `_index.md`, `log.md`). See [`wiki/meta/token-discipline.md`](../../wiki/meta/token-discipline.md).
+Read the minimum needed. Never Read catalog files (`index.md`, `_index.md`, `log.md`). See [`wiki/meta/token-discipline.md`](../../../wiki/meta/token-discipline.md).
 
 | Step | Cost (approx) | When to stop |
 |------|---------------|--------------|
@@ -144,20 +134,27 @@ type: question
 title: "Short descriptive title"
 question: "The exact query as asked."
 answer_quality: solid
+date: YYYY-MM-DD HH:mm
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-tags: [question, <domain>]
+aliases: []
+tags:
+  - YYYY/MM/DD
+  - question
+  - <domain-tag>
+status: developing
 related:
   - "[[Page referenced in answer]]"
 sources:
-  - "[[wiki/sources/relevant-source.md]]"
-status: developing
+  - "[[@YYYY__SOURCE__Title]]"
 ---
 ```
 
-Then write the answer as the page body. Include citations. Link every mentioned concept or entity. Write through `python3 scripts/wiki-page-write.py "wiki/questions/<title>.md" --content-file /tmp/answer.md` (allocates the address, validates frontmatter, takes the lock); never write the file directly. Frame the title as the question in Japanese 常体 (`〜か`), not as a topic. Quick mode never files.
+The frontmatter follows conventions §2: `date:` is required, `tags` is a block list whose first item is the date tag, and source links carry the `@` prefix. `wiki-page-write.py` rejects the page otherwise.
 
-**Close the loop on the concept side.** If the answer settles a bullet under a concept's `## 未解決の問い`, remove it and leave the trace: `python3 scripts/wiki-append.py "wiki/concepts/<concept>.md" --remove-question-containing "<問いの語>" --observation "[<主題節名>] <一文の答え> (回答 [[<question page>]])"`. If the answer raises a new open question, append it with `--question`. If the answer is really a *judgment on a proposition* (supported / contradicted with evidence on both sides), hand off to `wiki-thesis` instead of filing a `question` page.
+Then write the answer as the page body, starting with one H1 that repeats the title (`# <title>`). Include citations. Link every mentioned concept or entity. Write through `python3 scripts/wiki-page-write.py "wiki/questions/<title>.md" --content-file "$TMPDIR/answer.md"` (allocates the address, validates frontmatter, takes the lock); never write the file directly. Frame the title as the question in Japanese 常体 (`〜か`), not as a topic. Quick mode never files.
+
+**Close the loop on the concept side.** If the answer settles a bullet under a concept's `## 未解決の問い`, remove it and leave the trace: `python3 scripts/wiki-append.py --page "wiki/concepts/<concept>.md" --remove-question-containing "<問いの語>" --observation "[<主題節名>] <一文の答え> (回答 [[<question page>]])"`. If the answer raises a new open question, append it with `--question`. If the answer is really a *judgment on a proposition* (supported / contradicted with evidence on both sides), hand off to `wiki-thesis` instead of filing a `question` page.
 
 After filing, update catalogs via scripts — do not Read+Edit `wiki/index.md` or `wiki/log.md`:
 
@@ -174,8 +171,14 @@ python3 scripts/wiki-catalog.py add-catalog-line \
   --section "Questions" \
   --line "- [[Question Title]]: answer summary"
 
-python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD wiki-query | Short title\n- [[Question Title]]\n"
+python3 scripts/wiki-catalog.py prepend-master --text "$(cat <<'EOF'
+### YYYY-MM-DD wiki-query | Short title
+- [[Question Title]]
+EOF
+)"
 ```
+
+Pass multi-line `--text` through a heredoc. A `\n` inside double quotes is not a newline in bash and lands in the catalog as literal text.
 
 ---
 
@@ -183,26 +186,5 @@ python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD wiki-query
 
 If the question cannot be answered from the wiki:
 
-1. Say clearly: "I don't have enough in the wiki to answer this well."
-2. Identify the specific gap: "I have nothing on [subtopic]."
-3. Suggest: "Want to find a source on this? I can help you search or process one."
-4. Do not fabricate. Do not answer from training data if the question is about the specific domain in this wiki.
-
----
-
-## How to think (10-principle mapping)
-
-When working on this skill, apply the 10-principle loop. See [`skills/think/SKILL.md`](../think/SKILL.md) for the canonical framework.
-
-| # | Principle | Application here |
-|---|-----------|-------------------|
-| 1 | OBSERVE (ext) | Quick: trimmed hot window only. Standard/Deep: `retrieve.py` + `wiki-excerpt.py` per candidate. Never Read index.md. |
-| 2 | OBSERVE (int) | Am I synthesizing from training-data memory when I should be citing wiki pages? Check the source of each claim. |
-| 3 | LISTEN | What is the user's REAL question? The surface query is often a proxy for a deeper need. |
-| 4 | THINK | Quick / standard / deep mode? Match depth to question complexity, not eagerness. |
-| 5 | CONNECT (lat) | Are there pages I missed that would CHANGE the answer? Cross-check related pages before answering. |
-| 6 | CONNECT (sys) | Trimmed hot (quick) + retrieve + excerpt + wiki-resolve fallback form a single retrieval pipeline. Catalogs are write-only for agents. |
-| 7 | FEEL | Cite specific pages, not vague references. Future-me wants traceability back to the source page. |
-| 8 | ACCEPT | When the wiki doesn't have the answer, say so explicitly. Don't fabricate from training data. |
-| 9 | CREATE | The answer with citations + an offer to file the answer if it's worth keeping. |
-| 10 | GROW | Questions the wiki can't answer are content gaps — log them as autoresearch inputs. |
+1. State in Japanese which subtopic the wiki lacks, and offer to find or ingest a source.
+2. Do not fabricate. Do not answer from training data if the question is about the specific domain in this wiki.

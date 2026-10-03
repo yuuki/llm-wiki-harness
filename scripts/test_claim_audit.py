@@ -4,6 +4,7 @@
 WIKI_VAULT_ROOT で一時 vault を指し、実 wiki には触れない。
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -141,6 +142,18 @@ class ClaimAuditTest(unittest.TestCase):
         self.assertEqual(second["evidence"][0]["status"], "source_missing")
         self.assertIsNone(second["evidence"][0]["page"])
 
+    def test_path_form_source_links_count_as_sources(self):
+        # `[[wiki/sources/@X|表示]]` はファイル名だけの `[[@X]]` と同じ出典として扱う
+        concept = CONCEPT.replace("[[@2024__SIGCOMM__NetEdit]] — 百万台",
+                                  "[[wiki/sources/@2024__SIGCOMM__NetEdit|NetEdit]] — 百万台")
+        self.write("wiki/concepts/eBPF.md", concept)
+        out = json.loads(self.run_ok("sample", "--pages", "eBPF", "--per-page", "10").stdout)
+        first = out["claims"][0]
+        self.assertEqual(first["sources"], ["@2024__SIGCOMM__NetEdit"])
+        self.assertFalse(first.get("unverifiable"))
+        self.assertEqual(first["evidence"][0]["status"], "ok")
+        self.assertEqual(first["evidence"][0]["page"], "wiki/sources/@2024__SIGCOMM__NetEdit.md")
+
     def test_lint_stub_source_is_flagged(self):
         self.write("wiki/sources/@2025__PhD__Telemetry - Chapter 3.md", """---
 type: source
@@ -240,6 +253,209 @@ title: "Telemetry ch3"
         self.assertEqual(res.returncode, 3)
         res = run_script(["record", "--verdicts", str(self.vault / "missing.json")], self.vault)
         self.assertEqual(res.returncode, 3)
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("claim_audit", SCRIPTS / "claim-audit.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+NUM_CONCEPT = """---
+type: concept
+title: "集合通信"
+---
+
+# 集合通信
+
+## 異種クラスタでの集合通信
+
+- **異種 GPU クラスタでは帯域の違いを織り込んだスケジュール合成が要る。**
+  - 根拠: [[@2026__NSDI__HeteCCL]] — 32 GPU の異種クラスタで NCCL 比 2.1 倍
+  - 根拠: [[@2026__NSDI__HeteCCL]] — 起動遅延は約 200µs に収まる(§3.2)
+  - 留保: 再検証 2026-09-25 — 99 は照合しない
+- **Lumina の遅延は 150µs である。**
+  - 根拠: [[@2026__NSDI__HeteCCL]] — 本文
+
+## 未解決の問い
+
+## 未編纂の観察
+
+## 関連
+
+## 出典
+"""
+
+NUM_SOURCE = """---
+type: source
+title: "HeteCCL"
+sources:
+  - "[[.raw/papers/hetec.pdf]]"
+key_claims:
+  - "64 GPU の異種クラスタで NCCL 比 2.1 倍"
+---
+
+# HeteCCL
+
+## 概要
+
+64 GPU の異種クラスタで NCCL 比 2.1 倍速い。
+
+(Figure 3. 帯域は 17.5 GB/s で頭打ち。)
+
+## 論文情報
+
+- 2031 年刊
+
+## 出典
+
+- Hei et al., Version 9.9 (2026)
+"""
+
+NUM_RAW = """HeteCCL
+
+We evaluate on a heterogeneous cluster of 64 GPUs and achieve a 2.13x speedup over NCCL.
+
+Section 3.2 shows the launch latency stays within about 200 us for two tiers.
+"""
+
+
+class NumberCheckTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self.tmp.name)
+        for rel in ("wiki/concepts", "wiki/sources", "wiki/meta", ".vault-meta", ".raw/papers"):
+            (self.vault / rel).mkdir(parents=True)
+        (self.vault / "wiki/concepts/集合通信.md").write_text(NUM_CONCEPT, encoding="utf-8")
+        (self.vault / "wiki/sources/@2026__NSDI__HeteCCL.md").write_text(NUM_SOURCE, encoding="utf-8")
+        (self.vault / ".raw/papers/hetec.txt").write_text(NUM_RAW, encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_number_mentions_normalises_and_skips_identifiers(self):
+        mod = load_module()
+        got = dict(mod.number_mentions(
+            "約200µs、F1 0.48、76%、10K 件、1,000 万台、§3.3.2、H100 を 64 GPU、"
+            "[[@2024__X]] 2026-09-25 p.4-5 doi 10.1145/3600006 arXiv 2605.04333"))
+        self.assertEqual(set(got), {"200", "0.48", "76%", "10K", "1,000 万", "3.3.2", "64"})
+        self.assertIn("0.76", got["76%"])
+        self.assertIn("10000", got["10K"])
+        self.assertIn("10000000", got["1,000 万"])
+        self.assertEqual(got["3.3.2"], {"s:3.3.2"})
+        # 出典側は丸めと英語の数詞・桁語を許す
+        keys = mod.number_keys("F1 of 0.4837, two tiers, 10 million logs")
+        self.assertTrue({"0.48", "0.5", "2", "10000000"} <= keys)
+
+    def test_sample_packet_reports_missing_and_raw_only_numbers(self):
+        out = json.loads(run_script(["sample", "--pages", "集合通信", "--per-page", "10"], self.vault).stdout)
+        first, second = out["claims"]
+        nums = first["numbers"]
+        missing = {(m["where"], m["number"]) for m in nums["missing"]}
+        # 32 GPU はページにも raw にも無い(正しくは 64)。留保行の数値は照合しない。
+        self.assertEqual(missing, {("根拠[0]", "32")})
+        self.assertTrue(nums["missing"][0]["raw_available"])
+        # 200µs と §3.2 は source ページに無く raw にだけある。出典に無いと誤判定しないための印。
+        raw_only = {m["number"] for m in nums["raw_only"]}
+        self.assertEqual(raw_only, {"200", "3.2"})
+        self.assertEqual({m["number"] for m in second["numbers"]["missing"]}, {"150"})
+
+    def test_abbreviated_year_ranges_are_expanded(self):
+        mod = load_module()
+        got = [lit for lit, _ in mod.number_mentions("1984〜86 年、2019-21 年度、2024-05 に、1999〜2003 年")]
+        # 省略した後ろの年は展開して照らす。年月(2024-05)は展開すると前の年より前になるので残す
+        self.assertEqual(got, ["1984", "1986", "2019", "2021", "2024", "05", "1999", "2003"])
+        spec = [{"page": "wiki/concepts/集合通信.md",
+                 "observations": ["HeteCCL は 2019〜21 年の運用を振り返る(Source: [[@2026__NSDI__HeteCCL]])"]}]
+        (self.vault / ".raw/papers/hetec.txt").write_text(NUM_RAW + "\nDeployed from 2019 to 2021.\n",
+                                                           encoding="utf-8")
+        path = self.vault / "spec.json"
+        path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        res = run_script(["numbers", "--spec", str(path)], self.vault)
+        self.assertEqual(res.returncode, 0, res.stdout)
+
+    def test_numbers_pages_exit_code(self):
+        res = run_script(["numbers", "--pages", "集合通信"], self.vault)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        out = json.loads(res.stdout)
+        self.assertEqual(len(out["claims"]), 2)
+        fixed = NUM_CONCEPT.replace("32 GPU", "64 GPU").replace("150µs", "200µs")
+        (self.vault / "wiki/concepts/集合通信.md").write_text(fixed, encoding="utf-8")
+        res = run_script(["numbers", "--pages", "集合通信"], self.vault)
+        self.assertEqual(res.returncode, 0, res.stdout)
+        self.assertEqual(json.loads(res.stdout)["claims"][0]["missing"], [])
+
+    def test_numbers_spec_checks_observations_before_append(self):
+        spec = [{"page": "wiki/concepts/集合通信.md",
+                 "observations": ["[異種] HeteCCL は 32 GPU で評価した(Source: [[@2026__NSDI__HeteCCL]])",
+                                  "[異種] HeteCCL は 64 GPU で 2.1 倍(Source: [[@2026__NSDI__HeteCCL]])",
+                                  "出典の無い 7 件の観察"],
+                 "questions_add": ["128 GPU でも成り立つか"]}]
+        path = self.vault / "spec.json"
+        path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        res = run_script(["numbers", "--spec", str(path)], self.vault)
+        self.assertEqual(res.returncode, 1)
+        out = json.loads(res.stdout)
+        self.assertEqual(out["unsourced_lines"], 2)
+        self.assertEqual([m["number"] for r in out["lines"] for m in r["missing"]], ["32"])
+        self.assertEqual(out["lines"][0]["missing"][0]["where"], "observations[0]")
+
+    def test_numbers_source_page_skips_bibliography_and_separates_captions(self):
+        res = run_script(["numbers", "--source-page", "wiki/sources/@2026__NSDI__HeteCCL.md"], self.vault)
+        # キャプションだけの食い違いは終了 0(画像から読んだ数値は抽出テキストで確かめられない)
+        self.assertEqual(res.returncode, 0, res.stdout)
+        out = json.loads(res.stdout)
+        self.assertEqual(out["raw_text"], [".raw/papers/hetec.txt"])
+        # 2.1 は 2.13 の丸めとして通る。書誌節(2031、9.9)は照合しない。キャプションは別枠。
+        self.assertEqual(out["missing"], [])
+        self.assertEqual([m["number"] for m in out["caption_missing"]], ["17.5"])
+        text = NUM_SOURCE.replace("64 GPU の異種クラスタで NCCL 比 2.1 倍速い。", "48 GPU で速い。")
+        (self.vault / "wiki/sources/@2026__NSDI__HeteCCL.md").write_text(text, encoding="utf-8")
+        res = run_script(["numbers", "--source-page", "wiki/sources/@2026__NSDI__HeteCCL.md"], self.vault)
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual([m["number"] for m in json.loads(res.stdout)["missing"]], ["48"])
+
+    def test_chapter_raw_includes_toc(self):
+        for rel in (".raw/books/b/chapters",):
+            (self.vault / rel).mkdir(parents=True)
+        (self.vault / ".raw/books/b/chapters/ch-54.txt").write_text("Authentication is hard.\n", encoding="utf-8")
+        (self.vault / ".raw/books/b/toc.txt").write_text("53 Security\n54 Authentication\n57 Distributed\n",
+                                                         encoding="utf-8")
+        (self.vault / "wiki/sources/@2023__Book__B - Chapter 54.md").write_text(
+            "---\ntype: source\nsources:\n  - \"[[.raw/books/b/chapters/ch-54.txt]]\"\n---\n\n# B\n\n"
+            "## 概要\n\nセキュリティ部(第 53〜57 章)に属する。\n", encoding="utf-8")
+        res = run_script(["numbers", "--source-page", "wiki/sources/@2023__Book__B - Chapter 54.md"], self.vault)
+        self.assertEqual(res.returncode, 0, res.stdout)
+
+
+    def test_pdf_only_chapter_uses_toc_and_full_text(self):
+        # 章の原本が PDF だけでも、目次と全文テキスト(章の外の文献表を含む)に照らす
+        (self.vault / ".raw/theses/s/chapters").mkdir(parents=True)
+        (self.vault / ".raw/theses/s/chapters/ch-17.pdf").write_bytes(b"%PDF")
+        (self.vault / ".raw/theses/s/toc.txt").write_text("17.5.1 Fault-prone modules\n", encoding="utf-8")
+        (self.vault / ".raw/theses/s/s.txt").write_text("[119] Pitakrat et al. 2018. Hora.\n", encoding="utf-8")
+        (self.vault / "wiki/sources/@2021__TIST__S - Chapter 17.md").write_text(
+            "---\ntype: source\nsources:\n  - \"[[.raw/theses/s/chapters/ch-17.pdf]]\"\n---\n\n# S\n\n"
+            "## 概要\n\n§17.5.1 で HORA(2018)を比べる。HORA(2016)ではない 1999 年。\n", encoding="utf-8")
+        res = run_script(["numbers", "--source-page", "wiki/sources/@2021__TIST__S - Chapter 17.md"], self.vault)
+        out = json.loads(res.stdout)
+        self.assertEqual(out["raw_text"], [".raw/theses/s/toc.txt", ".raw/theses/s/s.txt"])
+        self.assertEqual([m["number"] for m in out["missing"]], ["2016", "1999"])
+
+
+    def test_author_year_citations_and_cited_source_years_are_not_flagged(self):
+        mod = load_module()
+        got = [lit for lit, _ in mod.number_mentions("Salfner+ 2010、Zhang et al. 2024、Cook (1998) と 2016 年に 64 GPU")]
+        self.assertEqual(got, ["2016", "64"])
+        # 行が引く出典名の年(@2026__)は刊行年として通す。引かない年は missing に残る
+        spec = [{"page": "wiki/concepts/集合通信.md",
+                 "observations": ["2026 年の HeteCCL は 64 GPU で評価した(Source: [[@2026__NSDI__HeteCCL]])",
+                                  "2016 年の HeteCCL(Source: [[@2026__NSDI__HeteCCL]])"]}]
+        path = self.vault / "spec.json"
+        path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+        out = json.loads(run_script(["numbers", "--spec", str(path)], self.vault).stdout)
+        self.assertEqual([m["number"] for r in out["lines"] for m in r["missing"]], ["2016"])
 
 
 if __name__ == "__main__":

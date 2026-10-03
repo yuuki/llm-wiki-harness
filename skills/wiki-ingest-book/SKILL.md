@@ -1,6 +1,6 @@
 ---
 name: wiki-ingest-book
-description: "Book-specialized wiki ingest. Use when the source is a book: a whole-book PDF, a set of per-chapter web pages (SRE Book style), or a fragment of a book (a single chapter PDF/text). Stores the immutable original under `.raw/books/<slug>/`, splits it by chapter, and files ONE source page PER CHAPTER into `wiki/sources/` plus ONE hub entity page for the book itself into `wiki/entities/`. Use this — not wiki-ingest-paper (papers) nor wiki-ingest-slides (slide decks) nor the generic wiki-ingest (articles) — whenever the material is a book or book chapter. Triggers on: 'この本を wiki に', '書籍を ingest', 'book を取り込んで', '本の PDF を章ごとに wiki 化', '章ごとに分割して取り込んで', 'ingest this book', 'この章だけ取り込んで'. Copyrighted book content: every chapter source page gets `publish: false` so Obsidian Publish never exposes it."
+description: "Book-specialized wiki ingest. Use when the source is a book: a whole-book PDF, a set of per-chapter web pages (SRE Book style), or a single chapter. Stores the immutable original under `.raw/books/<slug>/`, splits it by chapter, and files one source page per chapter into `wiki/sources/` plus one hub entity for the book into `wiki/entities/`. Every chapter page gets `publish: false` (copyrighted content). Use this instead of wiki-ingest-paper (papers), wiki-ingest-thesis (dissertations, long surveys), wiki-ingest-slides (decks) or the generic wiki-ingest (articles). Triggers on: 'この本を wiki に', '書籍を ingest', '章ごとに分割して取り込んで', 'この章だけ取り込んで', 'ingest this book'."
 ---
 
 # wiki-ingest-book: 書籍特化の wiki 取り込み
@@ -10,11 +10,11 @@ description: "Book-specialized wiki ingest. Use when the source is a book: a who
 書籍全体を 1 つの source ページに押し込まない。逆に、**最初から書籍の断片(1 章分)が入力された場合は分割しない**(source は 1 枚、book entity は作成/更新する)。
 
 > [!important] 最初に必ず読むこと
-> wiki を操作する前に [`wiki/meta/conventions.md`](../../wiki/meta/conventions.md)・[`wiki/meta/japanese-style.md`](../../wiki/meta/japanese-style.md)・[`wiki/meta/token-discipline.md`](../../wiki/meta/token-discipline.md) を読む。frontmatter・命名・言語(日本語常体)・出典規約は**標準形式より conventions が優先**される。本スキルの記述と conventions が食い違ったら conventions に従う。
+> wiki を操作する前に [`wiki/meta/conventions.md`](../../../wiki/meta/conventions.md)・[`wiki/meta/japanese-style.md`](../../../wiki/meta/japanese-style.md)・[`wiki/meta/token-discipline.md`](../../../wiki/meta/token-discipline.md) を読む。frontmatter・命名・言語(日本語常体)・出典規約は**標準形式より conventions が優先**される。本スキルの記述と conventions が食い違ったら conventions に従う。
 >
 > **カタログ類は Read しない**: `wiki/index.md`・`wiki/{sources,entities,concepts}/_index.md`・`wiki/hot.md`・`wiki/log.md` の全文を `Read` してはならない。既存ページの発見は `wiki-resolve.py`、カタログ更新は `wiki-catalog.py`、本文の部分読みは `wiki-excerpt.py` に任せる。
 >
-> 章担当 subagent へ渡す手順は [`references/subagent-brief.md`](references/subagent-brief.md) が正本である。フル SKILL を subagent に渡さない。抽出ファイルの形は [`references/extract-schema.md`](references/extract-schema.md)。図表の長いクロップ手順は [`references/figures.md`](references/figures.md)、fan-out の逸話と失敗事例は [`references/fan-out.md`](references/fan-out.md)。
+> 章担当 subagent へ渡す手順は、読み手用の [`references/reader-brief.md`](references/reader-brief.md) と書き手用の [`references/subagent-brief.md`](references/subagent-brief.md) が正本である。役割ごとに 1 ファイルだけを渡し、フル SKILL を subagent に渡さない。抽出ファイルの形は [`references/extract-schema.md`](references/extract-schema.md)。図表の長いクロップ手順は [`references/figures.md`](references/figures.md)、fan-out の逸話と失敗事例は [`references/fan-out.md`](references/fan-out.md)。
 
 > [!warning] 著作権(publish 無効化)
 > 書籍は著作権コンテンツである。本スキルが作る**章 source ページ(断片含む)の frontmatter には必ず `publish: false` を入れ**、Obsidian Publish への公開を無効化する。省略してはならない。book entity ページ(書誌と章リンクのハブ)は要約・書誌情報のみで本文の複製を含まないため対象外だが、本文引用を厚く書いた場合は同様に `publish: false` を付ける。
@@ -107,7 +107,7 @@ bash scripts/fetch-book.sh "<pdf-url|local-pdf-path>" "<slug>"
 
 ### 章検出の確認と失敗時のフロー
 
-`chapters_count` が想定と食い違うときの長い事例と `--chapters` の組み立て例は [`references/fan-out.md`](references/fan-out.md) の「章検出の失敗事例」に移した。ここでは次に何をするかだけを書く。
+`chapters_count` が想定と食い違うときの長い事例と `--chapters` の組み立て例は [`references/fan-out.md`](references/fan-out.md) の「章検出の失敗事例」にある。ここでは次に何をするかだけを書く。
 
 - **必ず `chapter_NN=` 行と `toc.txt` を突き合わせる**(序文・付録・索引の混入、章数の妥当性)。
 - **多すぎる**: 日本語技術書は節見出しの誤検出を疑う。`WARN:`(`厳密パターン 0 件` または `chapters_count>20`)を見逃さない。`toc.txt` の `chapter|` 行を確認する。
@@ -179,7 +179,7 @@ fan-out の前に、オーケストレータが以下を確定する:
 4. **book entity と著者 entity の骨格を先に作る**(書誌と空の「構成と主要テーマ」)。各章の `related` がリンク切れにならず、著者 entity の競合も防ぐ。**編集権はオーケストレータだけ。** 序文由来の記述に章 source を出典として付けない(Step 2)。fan-out 後に出典表記を点検し、報告の「気づいた矛盾」を読み飛ばさない。
 5. **印字ノンブルと PDF ページ番号のずれを確認し、briefing に書く。** 出典表記は印字ノンブルに統一する。章一覧には PDF ページ範囲を書き、「引用は節番号、無ければ印字ノンブル」と明示する。
 6. **briefing は読み手用と書き手用に分ける**(後述の「並列 fan-out」参照)。3 章以上では同じスクラッチに `briefing-extract.md`・`briefing-write.md` と `extracts/` を作る。
-7. **画像の章別振り分け**(Step 0.5 実行後): `images.json` のページ番号、または §1.7 で切り出した図の一覧を章のページ範囲に対応づける。
+7. **画像の章別振り分け**(Step 0.5 実行後): `images.json` のページ番号、または [`references/figures.md`](references/figures.md) §1.7 で切り出した図の一覧を章のページ範囲に対応づける。
 
 ---
 
@@ -194,8 +194,8 @@ fan-out の前に、オーケストレータが以下を確定する:
 2. **本文参照を全章 1 回 grep**して総点数を把握する。判断基準は点数ではなく「書籍全体に通用する機械的な切り出し規則が立つか」。**規則が立てばオーケストレータが 1 パスで全図を切り出す。** 規則が立たないクロップはオーケストレータか読み手が行う。書き手に章本文を読ませてクロップさせない(判明している判別条件は読み手用 briefing に書く)。10 点以下はオーケストレータ。0 件なら図の工程を省略し、その章には「図の作業は不要」と書く。
 3. **コンタクトシートを先に Read**する。判断不能セル・番号未確定セルだけ個別 Read。本文参照分は全件必須。書き手は briefing の図表表とコンタクトシートと extract の「図表」節だけを使う。章 txt からのキャプション抽出は読み手またはオーケストレータ。
 4. **除外リスト**(ページ全体スクショ、凡例・装飾・著者近影、ほぼ同一構図の繰り返し、文脈なし断片)以外は全部埋め込む。枚数上限は設けない。
-5. **attachment** は `wiki/sources/_attachments/<slug>/ch<NN>-fig<N.M>-<内容>.png`。ファイル名に `token`・`secret`・`password`・`credential`・`key` を含めない。
-6. **埋め込みは本文近傍。**「## 図表」セクションは作らない。ベクター図で埋め込みが取れない場合は [`references/figures.md`](references/figures.md) のキャプション座標クロップを、自章のページ範囲に限定して適用する。切り出し後は本文 grep の図番号集合と点数照合し、差分ゼロにしてから fan-out する。
+5. **attachment** は `wiki/sources/_attachments/<slug>/ch<NN>-fig<N.M>-<内容>.png`。
+6. **埋め込みは本文近傍。**「## 図表」セクションは作らない。ベクター図で埋め込みが取れない場合は [`references/figures.md`](references/figures.md) 経由で `scripts/crop-paper-figures.py` を自章のページ範囲に限定して使う。ページ全幅の手クリップはしない。切り出し後は本文 grep の図番号集合と点数照合し、差分ゼロにしてから fan-out する。
 
 ```bash
 # 300 ページ以下のときだけ
@@ -211,15 +211,15 @@ python3 scripts/contact-sheet.py --manifest ".raw/books/<slug>/images/images.jso
 3 章以上は既定で **2 段階**の subagent 並行。プロトコルは汎用 `wiki-ingest` の「Batch Ingest › Parallel mode (subagents)」に従う。本スキル固有の規則:
 
 - **読み手と書き手は必ず別起動。** 同一 subagent に「まず extract を書いてから、章本文を再読せずに書け」と 1 体で回してはならない。ターンをまたいで章本文が常駐文脈に残る。
-- **1〜2 章は 1 体可。** 断片 ingest は従来どおり 1 体で読んで書いてよい(分離の固定費のほうが大きい)。extract ファイルは作らなくてよい。
+- **1〜2 章は 1 体可。** 断片 ingest は 1 体で読んで書いてよい(分離の固定費のほうが大きい)。extract ファイルは作らなくてよい。
 - **読み手(extract):** 章本文を全部読む。[`references/extract-schema.md`](references/extract-schema.md) どおり `<scratch>/extracts/ch-NN.md` を書く。**見出しは空でも残す(schema)。** wiki ページは書かない。git 禁止。catalog / book entity 禁止。完了報告は extract パスと一行要約と図表点数だけ。
-- **extract の置き場:** 読み手用 briefing と同じスクラッチ。例: `/tmp/book-<slug>/extracts/ch-NN.md`。**extract を `.raw` に置かない**(wiki にも置かない。git 管理しない)。
-- **briefing は読み手用と書き手用に分ける。** `<scratch>/briefing-extract.md` と `<scratch>/briefing-write.md` の 2 ファイル。読み手は書き手用を読まない。1 ファイルにまとめるなら明確な 2 節にし、「読み手は書き手節を読むな」と書く。
+- **extract の置き場:** 読み手用 briefing と同じスクラッチ。例: `$TMPDIR/book-<slug>/extracts/ch-NN.md`(`/tmp` 直下はサンドボックスで書き込みを拒否されることがある)。**extract を `.raw` に置かない**(wiki にも置かない。git 管理しない)。
+- **briefing は読み手用と書き手用に分ける。** `<scratch>/briefing-extract.md` と `<scratch>/briefing-write.md` の 2 ファイル。読み手には書き手用のパスを渡さない(渡さなければ読まれない)。
 - **読み手用 briefing:** extract-schema、置き場、git 禁止、wiki 禁止、完了報告(パス・一行要約・図表点数)。`wiki-page-write` / 本文テンプレ / concept 追記手順は**入れない**。
 - **書き手用 briefing:** ヘルパー、テンプレ、extract パス、全章ページ名、既存 concept 候補、短い章は 30〜50 行。**章本文の原本パスは書かない**(必要なら「locator 確認は grep のみ。パスはオーケストレータが指定した 1 ファイルの該当行だけ」)。
-- **検査:** 書き手起動前に対象章の extract を 1 回かける。`python3 scripts/wiki-extract-check.py --forbid-raw extracts/*.md`(スクラッチの `extracts/` で)。`MISSING` / `QUOTE-HEAVY` / `FORBID-RAW`・読み手失敗の章は書き手を起動せず、読み手をやり直す。
-- **書き手(write):** extract と [`references/subagent-brief.md`](references/subagent-brief.md) の書き手節と書き手用 briefing を読む。**章本文の全文 Read はしない。** locator の確認は grep のみ。extract が薄いときのピンポイント Read は **1 章あたり最大 2 箇所、各 80 行**。超えるなら読み手やり直し。`wiki-page-write.py` / `wiki-append.py` で source / entity / concept を書く。画像は書き手用 briefing の図表表 + コンタクトシート + extract の「図表」節。
-- **subagent の個別プロンプトにはフル SKILL を渡さない。** 読み手には extract-schema と brief の読み手節と `briefing-extract.md`。書き手には brief の書き手節と `briefing-write.md`。
+- **検査:** 書き手起動前に対象章の extract を 1 回かける。`python3 scripts/wiki-extract-check.py --forbid-raw <scratch>/extracts/*.md`(vault ルートで実行し、extract はスクラッチの絶対パスで渡す)。`MISSING` / `QUOTE-HEAVY` / `FORBID-RAW`・読み手失敗の章は書き手を起動せず、読み手をやり直す。
+- **書き手(write):** extract と [`references/subagent-brief.md`](references/subagent-brief.md) と書き手用 briefing を読む。**章本文の全文 Read はしない。** locator の確認は grep のみ。extract が薄いときのピンポイント Read は **1 章あたり最大 2 箇所、各 80 行**。超えるなら読み手やり直し。`wiki-page-write.py` / `wiki-append.py` で source / entity / concept を書く。画像は書き手用 briefing の図表表 + コンタクトシート + extract の「図表」節。
+- **subagent の個別プロンプトにはフル SKILL を渡さない。** 読み手には `references/reader-brief.md` と extract-schema と `briefing-extract.md`。書き手には `references/subagent-brief.md` と `briefing-write.md`。1〜2 章の一体は書き手用だけを渡す。
 - **git 禁止を両方の briefing に書く。** `git add` / `git commit` / `git stash` / `git checkout` 禁止。確認の `git status` / `git diff` のみ。
 - **3〜4 体をローリングで回す**(ウェーブではない)。読み手を先に回し、検査を通った章から書き手を投入する。同時実行は読み手と書き手を合わせて 3〜4 体。
 - **同じハブ concept を奪い合う章の直列化は書き手に適用する。** 読み手は wiki を書かないので並行してよい。空いた枠には concept の重ならない章の書き手を入れる。後発の書き手には先行章が触った concept のファイル名を伝える。
@@ -232,7 +232,7 @@ python3 scripts/contact-sheet.py --manifest ".raw/books/<slug>/images/images.jso
 
 ## Step 1: 章 source ページを作る(`wiki/sources/`)
 
-3 章以上では書き手が extract と書き手用 briefing から組む。章本文の全文 Read はしない。ピンポイント Read は 1 章あたり最大 2 箇所、各 80 行。超えるなら読み手やり直し。**1〜2 章は 1 体可**で、そのときは従来どおり自章テキストを全部読んでから書く(斜め読みしない。長い章は分割して読む)。
+3 章以上では書き手が extract と書き手用 briefing から組む。章本文の全文 Read はしない。ピンポイント Read は 1 章あたり最大 2 箇所、各 80 行。超えるなら読み手やり直し。**1〜2 章は 1 体可**で、そのときは自章テキストを全部読んでから書く(斜め読みしない。長い章は分割して読む)。
 
 ### ファイル名(`@` プレフィックス必須)
 
@@ -405,7 +405,7 @@ Simon は同書第 2 版序文で「私の主張のうち彼が同意しない�
 python3 scripts/wiki-resolve.py concept:"<候補1>" concept:"<候補2>" concept:"<候補3>" --compact
 ```
 
-**1 書籍バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。溢れた候補は Step 4 の log に `Deferred:` 行として残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。既存 concept を更新するときは全文を `Read` せず、触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800`(必要なら `--outline`)で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。
+**1 書籍バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。並列 fan-out ではこの枠を章の書き手に配らない。新設する concept と担当章はオーケストレータが決めて書き手用 briefing に名指しし、名指しの無い書き手は新設せず候補を `Deferred:` として報告する(書き手ごとに 3 / 5 を与えると、章数ぶん枠が膨らむ)。溢れた候補は Step 4 の log に `Deferred:` 行として残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)かつ resolve の出力に `dialect-gate` が無く、`is_create_blocked` でもないときだけ今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。resolve が concept を見つけず `dialect-gate`(`--compact` では `dialect-gate:<n> pages`)を返した候補は新設しない。観察は source に留め、`concept-candidates.py add --reason "dialect-gate"` で台帳に積む。研究関心プロファイル(`wiki-profile.py`)へのマッチ度は新設・保留の判断に使わない(conventions §12 ルール 3)。既存 concept を更新するときは全文を `Read` せず、触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800`(必要なら `--outline`)で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。
 
 規約は conventions §8 と §12 のとおり: concept の本文は主題別の節(再編纂が書く。**主題節を書き換えない**)で、ingest の追記先は `## 未編纂の観察`(**2 つ以上のソースの突き合わせで見えた観察だけ**。旧名 `## 横断的知見` が残るページではそこ)と `## 未解決の問い` の 2 節。**上限内で触れた** concept のこの 2 節を更新する。追記の前に `wiki-excerpt.py --outline` で既存の命題を見て、補強・反証する観察なら冒頭に `[節名]` を付ける。積み増し原則(ingest は既存項目を書き換えない)。矛盾は `> [!contradiction]` callout を両ページに。
 
@@ -424,7 +424,7 @@ python3 scripts/wiki-verify-ingest.py --glob 'wiki/sources/@YYYY__PUB__<書名>*
   --require-related '[[<書名>]]'
 ```
 
-- **図の埋め込みと attachment を両方向で照合する**。未解決の埋め込みは `EMBED`、参照されていない attachment は `ATTACH-UNUSED` として出る。summary の `embeds=` が §1.5 の grep 総点数と一致し、`unresolved_embeds` と `unused_attachments` が 0 なら図の工程は完了である。
+- **図の埋め込みと attachment を両方向で照合する**。未解決の埋め込みは `EMBED`、参照されていない attachment は `ATTACH-UNUSED` として出る。summary の `embeds=` が [`references/figures.md`](references/figures.md) §1.5 の grep 総点数と一致し、`unresolved_embeds` と `unused_attachments` が 0 なら図の工程は完了である。
 - **Navigation 行のリンク**は `NAV-LINK` として本文リンク(`LINK`)と別枠で出る。前後章ページ名の 1 文字違いはここに出る。
 - **frontmatter の必須項目**(`address`・`publish: false`・`--date` の日付タグ・`source_type`・`title`/`date`/`created`/`updated`/`status`)と H1 を全章分見る。`--require-related` は各章の `related` が book entity を指すことを `FM-RELATED` で見る。
 - **枚数**は `--expect-count` が Step 0.3 で確定した枚数と照合し、合わなければ `COUNT` で落ちる。ほかに自己参照・分量・重複 address・source 本文の検証結果節も同時に見る。
@@ -475,20 +475,29 @@ python3 scripts/wiki-verify-ingest.py --glob 'wiki/sources/@YYYY__PUB__<書名>*
    )"
 
    python3 scripts/wiki-catalog.py prepend-changelog \
-     --file wiki/concepts/_index.md --text "### YYYY-MM-DD ingest-book | <書名>\n- 新規 concept: [[A]]\n"
+     --file wiki/concepts/_index.md --text "$(cat <<'EOF'
+   ### YYYY-MM-DD ingest-book | <書名>
+   - 新規 concept: [[A]]
+   EOF
+   )"
 
    python3 scripts/wiki-catalog.py add-catalog-line \
      --file wiki/concepts/_index.md \
      --section "現行コンセプトカタログ" \
      --line "- [[A]]"
 
-   python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD ingest-book | <書名>\n- Source: [[@...]]\n"
+   python3 scripts/wiki-catalog.py prepend-master --text "$(cat <<'EOF'
+   ### YYYY-MM-DD ingest-book | <書名>
+   - Source: [[@...]]
+   EOF
+   )"
    ```
+   複数行の `--text` は必ず heredoc で渡す。二重引用符の中の `\n` は改行にならず、カタログに文字のまま入る。
    新規 source/entity/concept ごとに、該当 `_index.md` へ `prepend-changelog` + `add-catalog-line`(必要な section を指定)。
 2. 大局が変わったら `wiki/overview.md`(overview は通常サイズのため Read/Edit 可)。
-3. `.raw/.manifest.json` に記録。**キーはディレクトリ** `.raw/books/<slug>`(video の前例に準拠):
+3. `.raw/.manifest.json` に記録。**キーはディレクトリ** `.raw/books/<slug>`。manifest は 2 MB を超え、他セッションも書き込むので、Read したり手で書き戻したりしない。エントリの JSON をスクラッチに書き、`wiki-manifest.py put` で渡す(ロックの内側で最上位へ書く):
    ```json
-   ".raw/books/<slug>": {
+   {
      "hash": "<PDF の md5。形態 b は代表章の md5 か 'web-chapters'>",
      "ingested_at": "YYYY-MM-DD",
      "chapters_count": 17,
@@ -497,7 +506,10 @@ python3 scripts/wiki-verify-ingest.py --glob 'wiki/sources/@YYYY__PUB__<書名>*
      "pages_updated": ["..."]
    }
    ```
-   増分章追加(断片・範囲追加)のときは**同キーを更新して章を積み増す**。
+   ```bash
+   python3 scripts/wiki-manifest.py put ".raw/books/<slug>" --json-file "$TMPDIR/book-<slug>/manifest-entry.json"
+   ```
+   増分章追加(断片・範囲追加)のときは**同キーを更新して章を積み増す**。`put` は渡した欄を上書きするので、`chapter_pages` などのリストは `wiki-manifest.py get ".raw/books/<slug>"` で既存分を取り、積み増した全体を渡す。
 
 4. **BM25 索引の差分更新**(commit 前に必須):
    ```bash
@@ -511,7 +523,7 @@ python3 scripts/wiki-verify-ingest.py --glob 'wiki/sources/@YYYY__PUB__<書名>*
 
 ## 再取り込み判定と増分章追加
 
-- `.raw/.manifest.json` の `.raw/books/<slug>` キーを確認。PDF ハッシュ一致かつ対象章が全て `chapter_pages` にあれば「取り込み済み(未変更)。force で再取り込み」と報告してスキップ。
+- `python3 scripts/wiki-manifest.py get ".raw/books/<slug>"` で記録を確認する(終了 3 = 未登録)。PDF ハッシュ一致かつ対象章が全て `chapter_pages` にあれば「取り込み済み(未変更)。force で再取り込み」と報告してスキップ。
 - **同じ書籍の未取り込み章の追加**は再取り込みではない: 既存の章 source と book entity を温存し、新しい章 source を作って book entity の「構成と主要テーマ」へ追記、manifest の同キーへ積み増す。
 - `fetch-book.sh` は既存 `.raw/books/<slug>/` にファイルがあると停止する(物理ゲート)。増分追加で原本が既にある場合は再取得せず、既存の `chapters/ch-NN.txt` を読む。
 
@@ -539,7 +551,10 @@ git commit -m "wiki: ingest-book | <書名>"
 
 ```bash
 tr '\n' '\0' < "$TMPDIR/book_files.txt" | xargs -0 git add --
+git add -f .vault-meta/concept-candidates.json   # 候補台帳に積んだときだけ
 ```
+
+- `.vault-meta/` は `.gitignore` の対象だが、台帳は追跡されている。`-f` を付けないと `git add` 全体が ignored で止まる。台帳を stage したときは、下の `--extra-files` にも同じパスを足す。
 
 - **stage したらコミット前に厳密照合する**。ファイル名だけを目で眺めても、entity/concept は書名を含まないので判断できない。`git diff --cached --name-only` の集合が「本書ファイル一覧 + 共有索引 + `.raw/books/<slug>/` + attachment ディレクトリ」と過不足なく一致することを 1 コマンドで確かめる(末尾 `/` はディレクトリ前方一致):
   ```bash
@@ -559,37 +574,13 @@ tr '\n' '\0' < "$TMPDIR/book_files.txt" | xargs -0 git add --
 
 ## やってはいけないこと
 
-- **`scripts/allocate-address.sh` を直接実行しない。** 採番はヘルパー外では失敗する。`wiki-page-write.py` がロック内で行う。`cd` だけの Bash も禁止(必ず `cd <vault絶対パス> && <実処理>`)。
-- **新規 source / entity / concept を `Write` ツールで作らない。** 既存なら append。衝突したらマージ復旧せず止める。
-- **シートで番号が付いた attachment を Read しない。** `individual-reads` はシートを除く画像 Read の実数。
-- **完了報告の計測に `--latest` を使わない。** `--self`(Claude Code / Codex / Cursor の環境変数。失敗時だけ `--session <ID>`)にする。Cursor や Codex 経由を理由にスキップしない。
-- **章 source ページの `publish: false` を省略しない**(著作権コンテンツの外部公開防止)。
-- **書籍全体を 1 つの source ページに押し込まない**(断片入力を除く)。逆に断片入力を勝手に「全体 ingest」へ拡大しない。
-- **全ページレンダリング(`pdftoppm` 全頁)をしない**。書籍は数百ページある。
-- **subagent から book entity・共有ファイルを書かない**(オーケストレータのみ)。
-- `.raw/` の既存ファイルを変更しない(本スキルが新規生成する `.raw/books/<slug>/` 配下と `.raw/.manifest.json` は対象外)。
-- `papers/`・`research/`・`structures/`・`notes/` を書き換えない。wiki から一方向リンクのみ。
-- 目次だけから未読の章の要約を書かない(読んだ章だけを wiki 化する)。
-- 重複ページを作らない。作成前に `wiki-resolve.py` で既存(書籍 entity・章 source・concept)を確認(index 全文や grep 全走査に頼らない)。
-- **ページ数を確認する前に画像一括抽出を実行しない**。`fetch-book.sh` の `pages=` 出力を見て 300 ページ超なら実行自体をスキップする(実行してタイムアウトしてから諭さない)。
-- **subagent の「これから更新する」という発言を実施済みとして扱わない**。索引・log・manifest に書く前に必ず `git status`/`git diff` で実体を確認する。
-- **章検出結果の `chapters_count` が想定と食い違う場合、確認せずそのまま fan-out に進まない**。多すぎる場合は節見出しの誤検出、少なすぎる場合は Part 単位への化けを疑う。`toc.txt` の `outline|` 行(level 1 と 2 の両方)と本の目次を突き合わせ、必要なら `--chapters` で正しい章境界を再検出してから進む。
-- **`chapter_NN=` の題を鵜呑みにしない**。`--chapters` で手動指定したとき、題は指定した開始ページの outline エントリから引かれるため、章扉と同じページに節見出しがあると「1.1 SREとは何か」のような**節題が章題として返る**。章題は `toc.txt` の level 2 エントリから自分で拾って確定する。
-- **同じ一覧を複数ファイルへ手で書き写さない**(索引・log・manifest のページ一覧)。`git status` の出力から機械的に生成し、件数を照合する。
-- **図の点数を調べずに図の工程を subagent へ丸投げしない**。本文の図参照を 1 回 grep すれば総点数が分かる。**機械的な切り出し規則が立つなら、点数によらずオーケストレータが 1 パスで片付けたほうが速く確実である**。
-- **「図N-M」で始まる行をキャプションとみなさない**。本文中の図参照が同じ書き出しを持つ。洋書は末尾のコロン(`Figure 4.1:`)で分離できることが多いので先に試し、それで駄目ならフォント・サイズで判別する([`references/figures.md`](references/figures.md) §1.7)。
-- **章の中身の示唆を裏取りせずに個別プロンプトへ書かない**。原本を 1 回 grep すれば確定する。巻末一覧の印字ページから章を逆算しない([`references/fan-out.md`](references/fan-out.md))。
-- **切り出せた図の点数を照合せずに fan-out しない**。本文 grep の図番号集合と突き合わせ、差分ゼロにしてから配る。未マッチを黙って残すと、その図は永久に埋め込まれない。
-- **outline の level だけで章を切り出せると仮定しない**。部・章・節が同じ level に同居する書籍がある。章題のパターンで絞る(Step 0)。
-- **アウトラインが 0 件だからといって取り込みを諦めない**。全文テキストの目次とランニングヘッダの印字ノンブルから、オフセット 1 個で章境界が復元できる(Step 0)。
-- **矩形を確かめずに `get_image_rects()` の結果を図として扱わない**。スキャン PDF ではページ全面の矩形が返り、全ページが 1 枚の巨大な図として切り出される。ページ矩形と比べて一致していたらキャプション座標クロップへ切り替える([`references/figures.md`](references/figures.md) §1.7)。
-- **キャプション座標クロップの結果を目視せずに配らない**。スキャン PDF では上端・下端が切れやすい。1 点ずつ Read で開いて境界を詰める([`references/figures.md`](references/figures.md) §1.7)。
-- **序文由来の記述に章 source ページを出典として付けない**。著者の経歴・成立事情・献辞は章本文に無い。序文を source 化しないなら書誌そのものを指す(Step 2)。
-- **先に作った book entity・著者 entity を fan-out 後に点検せずに済ませない**。骨格段階で書いた出典は序文由来のことが多く、誤りは subagent の報告からしか見つからない(Step 0.3)。
-- **読み手と書き手を同一 subagent で回さない**(3 章以上)。別起動する。1〜2 章は 1 体可。
-- **extract を `.raw` に置かない**。wiki にも置かない。briefing と同じスクラッチの `extracts/` だけ。
-- **読み手に wiki を書かせない**。`MISSING` / `QUOTE-HEAVY` / `FORBID-RAW` の extract では書き手を起動せず、読み手をやり直す。書き手起動前に `python3 scripts/wiki-extract-check.py --forbid-raw extracts/*.md` を 1 回かける。
-- **読み手用 briefing に `wiki-page-write` / 本文テンプレ / concept 追記を入れない。** 書き手用 briefing に章本文の原本パスを書かない。
-- **subagent に git 操作を許したまま fan-out しない**。briefing に明示的な禁止条項を書く。書かなければコミットされる。
-- **別セッションの並行 ingest を想定せずに `git add` しない**。差分の中身で本書分を機械的に分類し、**分類から漏れた側を 1 件ずつ確認する**(Step 4)。
-- **索引を書く前の機械的検証(Step 3.5)を飛ばさない**。埋め込みの解決・未使用 attachment・Navigation リンク・frontmatter 必須項目は、報告文ではなく `wiki-verify-ingest.py` で確かめる。検査のために手書きの bash ループを組み直さない(呼び出しも出力もそのまま常駐文脈に積まれる)。
+原本・履歴・採番・公開範囲・他セッションの作業を壊す操作だけを、ここに再掲する。章検出、図の切り出し、読み手と書き手の分離など手順上の注意は、各 Step と [`references/fan-out.md`](references/fan-out.md)・[`references/figures.md`](references/figures.md) にある。
+
+- **`.raw/` の既存原本を変更しない。** 例外は、本スキルが今回生成するファイルと `.raw/.manifest.json` の更新だけである。既存の `.raw/books/<slug>/` を上書きするのは、`--force` で意図して再生成するときに限る。extract と briefing はスクラッチに置き、`.raw` にも wiki にも置かない。
+- **章 source の `publish: false` を省略しない**(著作権コンテンツの外部公開防止)。
+- **新規ページは `wiki-page-write.py`、既存ページへの追記は `wiki-append.py` だけで書く。** `Write` で新規を作らない。`scripts/allocate-address.sh` を直接実行しない(採番はヘルパーがロック内で行う)。ヘルパーを `wiki-lock.sh` で包まない。他セッションと衝突したら、マージ復旧せず止める。
+- **book entity、共有カタログ、`.raw/.manifest.json` はオーケストレータだけが書く。** カタログは `wiki-catalog.py` 経由で更新し、Read/Edit しない。
+- **subagent に git の書き込み操作をさせない。** 読み手用と書き手用の両方の briefing に禁止条項を書く。書かなければコミットされる。
+- **`git add` には本書分のファイル一覧だけを渡す。** 広い指定を使わない。別セッションの差分が混ざっている前提で分類し、`--staged-check` が通ってから commit する。履歴を勝手に書き換えない。
+- **索引・log・manifest は、subagent の報告ではなく `git status` と `wiki-verify-ingest.py` の結果から書く**(Step 3.5、Step 4)。
+- **`papers/`・`research/`・`structures/`・`notes/` を書き換えない。** wiki から一方向リンクのみ。

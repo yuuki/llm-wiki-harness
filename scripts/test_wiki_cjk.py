@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wiki_tokenize と BM25 和文 2-gram の試験。一時 vault は実 wiki に触れない。"""
+"""wiki_cjk と BM25 和文 2-gram の試験。一時 vault は実 wiki に触れない。"""
 
 import importlib.util
 import json
@@ -23,7 +23,7 @@ def load_mod(name, filename):
 class TokenizeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tok = load_mod("wiki_tokenize_ut", "wiki_tokenize.py")
+        cls.tok = load_mod("wiki_cjk_ut", "wiki_cjk.py")
 
     def t(self, text):
         return self.tok.tokenize(text)
@@ -106,16 +106,6 @@ class TokenizeTest(unittest.TestCase):
         self.assertEqual(old.findall(text), [text])
         self.assertGreater(len(self.t(text)), 1)
 
-    @unittest.skipUnless(
-        (Path(__file__).resolve().parent / "curation" / "pref-index.py").is_file(),
-        "vault-only pref-index.py is absent",
-    )
-    def test_pref_index_shares_the_same_function(self):
-        pref = load_mod("pref_index_tok", Path("curation") / "pref-index.py")
-        text = "LLM推論における分散トレーシングの実装"
-        self.assertEqual(pref.tokenize(text), self.t(text))
-        self.assertTrue(set(pref.tokenize("分散トレーシング")) & set(self.t(text)))
-
 
 class Bm25JapaneseQueryTest(unittest.TestCase):
     def setUp(self):
@@ -143,7 +133,7 @@ class Bm25JapaneseQueryTest(unittest.TestCase):
                 "contextualized_text": "Clos は Spine10台と Leaf20台で組む。",
             }), encoding="utf-8")
         os.environ["WIKI_VAULT_ROOT"] = str(self.vault)
-        sys.modules.pop("wiki_tokenize", None)
+        sys.modules.pop("wiki_cjk", None)
         sys.modules.pop("bm25_index_ja", None)
         self.bm25 = load_mod("bm25_index_ja", "bm25-index.py")
         self.bm25.VAULT_ROOT = self.vault

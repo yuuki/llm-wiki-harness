@@ -122,6 +122,30 @@ class ConceptCandidatesTest(unittest.TestCase):
         self.assertIn("新設を検討する候補(1 件)", report)
         self.assertIn("フローレットスイッチング", report)
 
+    def test_seed_from_log_reads_monthly_archives(self):
+        (self.vault / "wiki/log.md").write_text(
+            "## [2026-10-01] ingest-paper | 今月\n- Source: [[@2026__arXiv__A]]\n- Deferred: [[概念甲]]\n",
+            encoding="utf-8")
+        (self.vault / "wiki/log").mkdir(parents=True, exist_ok=True)
+        (self.vault / "wiki/log/2026-09.md").write_text(
+            "---\ntitle: \"wiki 操作ログ 2026-09\"\ntype: meta\n---\n\n# wiki 操作ログ 2026-09\n\n"
+            "## [2026-09-03] ingest-paper | 先月\n- Source: [[@2026__arXiv__B]]\n- Deferred: [[概念乙]]\n",
+            encoding="utf-8")
+        dry = self.ledger("seed-from-log", "--dry-run")
+        self.assertEqual(sorted(it["name"] for it in dry["items"]), ["概念乙", "概念甲"])
+
+    def test_report_puts_dialect_gated_ready_in_gate_section(self):
+        (self.vault / "wiki/concepts/アラート管理.md").write_text(
+            "---\ntype: concept\ntitle: \"アラート管理\"\n---\n\n# アラート管理\n",
+            encoding="utf-8")
+        self.ledger("add", "--name", "アラーム管理",
+                    "--source", "@2026__X__S1", "--source", "@2026__Y__S2",
+                    "--date", "2026-09-01")
+        report = self.run_ok(LEDGER, "report").stdout
+        self.assertIn("### 方言ゲート（新設禁止。`plan` で alias-only か rejected）", report)
+        self.assertIn("アラーム管理", report)
+        self.assertNotIn("新設を検討する候補", report)
+
     def test_resolve_hint_appears_only_without_page_hit(self):
         self.ledger("add", "--name", "フローレットスイッチング", "--alias", "flowlet",
                     "--source", "@2026__arXiv__A", "--source", "@2025__Book__B - Chapter 3", "--date", "2026-09-01")

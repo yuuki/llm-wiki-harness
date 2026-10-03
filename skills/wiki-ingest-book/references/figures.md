@@ -1,6 +1,6 @@
 # 書籍図表の抽出手順
 
-`wiki-ingest-book` の従属資料。SKILL の Step 0.5 から移した長いクロップ手順・スキャン PDF 警告・フォント判別である。方針の箇条書きは SKILL 側が正本である。
+`wiki-ingest-book` の従属資料。SKILL の Step 0.5 の詳細(長いクロップ手順・スキャン PDF 警告・フォント判別)である。方針の箇条書きは SKILL 側が正本である。
 
 ## 役割
 
@@ -135,13 +135,13 @@ grep -n "^Figure \|^Table " ".raw/books/<slug>/chapters/ch-NN.txt" | head -40
 - 同一実験の**ほぼ同一構図の繰り返し**(例: 同じグラフの試行回数だけ異なるバリエーションが 5 点以上続く場合、代表 1〜2 点+それ以外は本文中で言及のみに留める。何点を省略したかは subagent 報告に明記する)
 - 本文の言及なしに意味が取れない断片図(キャプション座標クロップで文脈を含められないもの)
 
-1 章あたりの枚数に上限は設けない。図表点数が多い章(20 点超)では、読み手またはオーケストレータがクロップを本文読解と並行して機械的に進めてよい(逐一の重要度判定に時間をかけすぎない)。書き手の埋め込みは、既に揃った図表表とコンタクトシートと extract の「図表」節から行う。書き手に章本文を読ませてクロップさせない。
+1 章あたりの枚数に上限は設けない。本文参照分は全件取り込むので重要度判定は要らない。図表点数が多い章(20 点超)でも、読み手またはオーケストレータがクロップを本文読解と並行して機械的に進める。書き手の埋め込みは、既に揃った図表表とコンタクトシートと extract の「図表」節から行う。書き手に章本文を読ませてクロップさせない。
 
 ---
 
 ## 4. ベクター図のキャプション座標クロップ(オーケストレータまたは読み手)
 
-埋め込み画像が取れない場合は `wiki-ingest-paper` の「Step 0.5 §1.5 PyMuPDF キャプション座標クロップ」の定型を、対象章のページ範囲に限定して適用する(`uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache" python3 - <<'PY'` 起動、キャプション座標から `get_pixmap(clip=...)` でクロップ)。詳細手順は [`../../wiki-ingest-paper/references/figures.md`](../../wiki-ingest-paper/references/figures.md) を開く。書き手は本節を使わない。
+埋め込み画像が取れない場合は `scripts/crop-paper-figures.py` を対象章のページ範囲に限定して使う(`uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache"`)。ページ全幅の手クリップはしない。手順は [`../../wiki-ingest-paper/references/figures.md`](../../wiki-ingest-paper/references/figures.md)。書き手は本節を使わない。
 
 ---
 
@@ -155,7 +155,7 @@ cp ".raw/books/<slug>/images/image-042-001.png" \
    "wiki/sources/_attachments/<slug>/ch03-fig3.2-bathtub-curve.png"
 ```
 
-ファイル名は `ch<NN>-fig<N.M>-<内容>.png`。**`token`・`secret`・`password`・`credential`・`key` を含む名前は禁止**(サンドボックスの Read 拒否ルールに引っかかる。`wiki-ingest-paper` Step 0.5 §3 参照)。
+ファイル名は `ch<NN>-fig<N.M>-<内容>.png`。Read が権限設定で拒否されたときの改名は `wiki-ingest-paper` Step 0.5 §3 を参照する。
 
 ---
 

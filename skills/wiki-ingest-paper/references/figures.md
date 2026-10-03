@@ -1,106 +1,83 @@
 # 論文図表のキャプション座標クロップ
 
-`wiki-ingest-paper` の従属資料。SKILL の Step 0.5 §1.5 から移した PyMuPDF 手順である。方針(コンタクトシート → 判断不能セルだけ Read → 本文参照は全件)は SKILL 側が正本である。
+`wiki-ingest-paper` の従属資料。方針(コンタクトシート → 判断不能セルだけ Read → 本文参照は全件)は SKILL 側が正本である。
 
-`pdf.js` が抽出する `image-*.png` はラスター埋め込み画像のみである。ベクター描画(taxonomy 図・アーキテクチャ図・フロー図)はこの方法では取れない。チェックリストに載った図表が `image-*.png` に無ければ、この手順で全件クロップする。「埋め込み画像が取れなかったから図表は諦める」は認めない。
+`pdf.js` が抽出する `image-*.png` はラスター埋め込みだけである。ベクター描画(taxonomy・アーキテクチャ・フロー)は取れない。チェックリストに載って `image-*.png` に無い図表は、この手順で全件クロップする。「埋め込み画像が取れなかったから諦める」は認めない。
+
+座標を手で拾ってページ全幅を切らない。二段組み ACM では本文が混入する。キャプション探索もブロック先頭の `startswith("Fig.")` にしない。キャプションはブロック途中にあり、`Figure 2 presents` のような本文言及と紛らわしい。
 
 ---
 
 ## 起動
 
-`pip install` / `uv pip install` はサンドボックスで拒否される。代わりに次を使う。
-
-```bash
-uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache" python3 - <<'PY'
-import fitz
-# ここに Python コードを書く
-PY
-```
-
-- `uv run --with` は `pip:*` / `uv pip:*` の deny ルールに引っかからない
-- `--cache-dir "$TMPDIR/uv-cache"` が必須。省略すると `~/.cache/uv/.git` への書き込みで `Operation not permitted` になる
-- ヒアドキュメント(`<<'PY' ... PY`)でスクリプトを渡すと、シェルの `!` history expansion と衝突しない
-
----
-
-## Step A: 全ページのキャプション座標を一括探索する
-
-```bash
-uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache" python3 - <<'PY'
-import fitz
-
-SLUG = "<slug>"
-doc = fitz.open(f".raw/papers/{SLUG}.pdf")
-print("pages:", len(doc))
-
-for i, page in enumerate(doc):
-    for b in page.get_text("blocks"):
-        x0, y0, x1, y1, txt, bn, bt = b
-        if bt == 0 and txt.strip().startswith("Fig."):
-            print(f"  PDF page {i+1}: y=[{y0:.1f},{y1:.1f}] x=[{x0:.1f},{x1:.1f}] | {txt.strip()[:100]}")
-PY
-```
-
----
-
-## Step B: 図のあるページの全ブロックを確認して上端を特定する
-
-```bash
-uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache" python3 - <<'PY'
-import fitz
-
-SLUG = "<slug>"
-doc = fitz.open(f".raw/papers/{SLUG}.pdf")
-
-# Step A で判明したページ番号(1-indexed)を列挙する
-for pg_1indexed in [6, 8, 12]:
-    page = doc[pg_1indexed - 1]
-    print(f"\n=== PDF page {pg_1indexed} ===")
-    for b in page.get_text("blocks"):
-        x0, y0, x1, y1, txt, bn, bt = b
-        kind = "IMG" if bt == 1 else "TXT"
-        print(f"  {kind} y=[{y0:.1f},{y1:.1f}] | {txt.strip()[:80] if bt==0 else '(image)'}")
-PY
-```
-
-図の上端は「図の直前にある本文テキストブロックの y1」から推定する。ページヘッダー(多くは y < 65 pt)はクロップ範囲から除く。
-
----
-
-## Step C: 図表領域をクロップして attachment に保存する
+`pip install` / `uv pip install` はサンドボックスで拒否される。システムの python には PyMuPDF が無いことが多い。次でヘルパーを呼ぶ。
 
 ```bash
 mkdir -p "wiki/sources/_attachments/<slug>"
+uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache" python3 scripts/crop-paper-figures.py \
+  --pdf ".raw/papers/<slug>.pdf" \
+  --out "wiki/sources/_attachments/<slug>" \
+  --id fig:1:fig01-architecture.png \
+  --id fig:2:fig02-results.png \
+  --id tab:1:table1-dataset.png
+```
 
+- `--cache-dir "$TMPDIR/uv-cache"` が必須。省略すると `~/.cache/uv/.git` への書き込みで落ちる
+- `--id` は `fig:番号:ファイル名.png` または `tab:番号:ファイル名.png`
+- 各 `--id` について JSON 1 行。`ok: false` は `reason` を見て手修正する
+- `review: true` は本文混入のサイズ合図(ACM 全幅スライス等)。**そのファイルは Read して目視する**
+- `slide-` / `fig-page` / `page-` / `poster` はスキップする(論文図ではない)
+
+ヘルパーがやること:
+
+1. `page.search_for("Figure N:")` / `Fig. N.` / `Table N:` だけを使う(末尾スペースの `Figure N ` は本文言及に当たるので使わない)
+2. キャプション行は同じ行・同じ段だけ伸ばす。隣カラムの同一ベースラインは段間で切る
+3. キャプションが段をまたぐときだけ全幅。一段のキャプションは `page.rect.width / 2` でクランプする
+4. 描画・画像の塊をキャプション直上からギャップで止め、同一ページの直前キャプションより上へは伸ばさない
+5. 表は高さ 200 px 未満(キャプションだけ)を捨てる。図は 110 px 未満を捨てる
+
+`uv run` がキャッシュ待ちで止まる、または sandbox が拒否したら、同じコマンドを権限付きで再実行する。手で `fitz` の全幅 `clip` を組まない。
+
+---
+
+## 目視
+
+クロップ後、次は必ず Read する。
+
+- ヘルパーが `review: true` を付けたファイル
+- `ok: false` で手修正したファイル
+- コンタクトシート上で位置が疑わしいセル
+
+合格: 図(または表)とキャプションだけで、左右の本文カラム・要旨・ヘッダーが写っていない。
+
+落ちる典型:
+
+| 症状 | 原因 | 直し方 |
+|---|---|---|
+| 図の下または横に二段組み本文 | 全幅クリップ / キャプションを隣段と結合 | ヘルパー再実行。手修正するならキャプション中心の段だけ |
+| キャプションだけの細い帯 | 表罫が高さ 0 で無視された / 探索が本文「Table N summarizes」に当たった | ヘルパーは後者を拾わない。前者は表 bbox を手で足す |
+| 図が別の段落 | `Figure 2 presents` をキャプションにした | `Figure N:` / `Fig. N.` だけを使う |
+| 同一ページの前の図まで含む | 直前キャプションで切っていない | ヘルパー任せ。手修正なら前キャプションの y1 を上端にする |
+| `fig-page*` / スライド / ポスター | 論文図ではない | 作らない。既存なら埋め込まない |
+
+ページヘッダー(多くは y < 65 pt)とランニングヘッダーは範囲に入れない。
+
+---
+
+## 手修正が必要なとき
+
+ヘルパーが `no_caption` / `thin` を返した番号だけ、そのページを `page.get_text("blocks")` で見て `clip` する。**既定の x はページ全幅にしない。** キャプションの x 中心がページ中央より左なら左段、右なら右段。`SCALE = 3.0`(216 DPI)。キャプションを正規表現で探すなら、`Figure N:` / `Fig. N.` の区切りまで含めて大文字小文字を区別する。`Figure N `(末尾スペース)や、`re.I` を付けた `[A-Z]` は、本文の「Table 2 summarizes」のような参照文に当たる。
+
+```bash
 uv run --with pymupdf --cache-dir "$TMPDIR/uv-cache" python3 - <<'PY'
 import fitz
-
-SLUG = "<slug>"
-OUT  = f"wiki/sources/_attachments/{SLUG}"
-doc  = fitz.open(f".raw/papers/{SLUG}.pdf")
-SCALE = 3.0  # 216 DPI (72 pt × 3)
-mat   = fitz.Matrix(SCALE, SCALE)
-
-# (pdf_page_0indexed, y_top, y_bottom, x_left, x_right, filename)
-# y_top   : 直前テキストブロックの y1(図の上端の手がかり)
-# y_bottom: キャプション y0 - 余白(図の下端)
-crops = [
-    (5,  540, 745, 30, 562, "fig01-architecture.png"),
-    (7,   62, 291, 30, 562, "fig02-results.png"),
-]
-
-for pg_idx, y0, y1, x0, x1, fname in crops:
-    page = doc[pg_idx]
-    pix  = page.get_pixmap(matrix=mat, clip=fitz.Rect(x0, y0, x1, y1))
-    pix.save(f"{OUT}/{fname}")
-    print(f"saved {OUT}/{fname}  ({pix.width}x{pix.height}px)")
+doc = fitz.open(".raw/papers/<slug>.pdf")
+page = doc[<0indexed>]
+# キャプション検索で y0 を確認してから clip する
+print(page.search_for("Figure N:"))
+pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=fitz.Rect(x0, y0, x1, y1))
+pix.save("wiki/sources/_attachments/<slug>/<file>.png")
 PY
 ```
 
-クロップ後は Read ツールで画像を開いて内容を目視確認する。ページヘッダー・フッターが混入していたら `y_top` / `y_bottom` を調整して再実行する。
-
-**注意点**:
-
-- 図本体(ベクター・埋め込みとも)はテキストブロックに出ないため、図の上端は直接取得できない。同一ページ内で図の上に本文テキストがある場合は、直前のテキストブロック y1 を上端として使う。
-- 1 ページに複数の図がある場合は、前の図のキャプション y1 を次の図の上端の手がかりにする。
-- ページヘッダー/フッターが混入しないよう y 範囲を調整する。
+同じ PNG 名で上書きする。`.raw/` の PDF は触らない。

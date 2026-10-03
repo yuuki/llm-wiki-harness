@@ -1,6 +1,6 @@
 ---
 name: wiki-ingest-slides
-description: "Slide-deck-specialized wiki ingest. Use when the source is a slide PDF or slide sharing page such as SpeakerDeck, with optional audio or video file/URL. Stores the immutable deck under `.raw/slides/SLUG/`, renders every slide page to images, optionally prepares media/transcript, then files the source into the cross-source wiki layer (`wiki/sources/`, `wiki/entities/`, `wiki/concepts/`). Triggers on: 'このスライドを wiki に', 'SpeakerDeck を ingest', 'slide deck を取り込む', 'スライドPDFをwiki化', '音源付きでスライドを取り込む'. Distinct from create-conference-note, which writes a talk note under `research/conferences/`; this skill builds wiki pages and never writes to `research/`. When 3+ decks are given at once, this skill fans out subagents and ingests them in parallel by default."
+description: "Slide-deck-specialized wiki ingest. Use when the source is a slide PDF or a slide sharing page such as SpeakerDeck, optionally with an audio or video recording. Stores the immutable deck under `.raw/slides/<slug>/`, renders every page to images, optionally prepares a transcript, then files the source into `wiki/sources/`, `wiki/entities/`, `wiki/concepts/`. Three or more decks at once are ingested in parallel by subagents by default. Never writes to `research/` (a talk note under `research/conferences/` is create-conference-note). Triggers on: 'このスライドを wiki に', 'SpeakerDeck を ingest', 'スライドPDFをwiki化', '音源付きでスライドを取り込む'."
 ---
 
 # wiki-ingest-slides: スライド資料特化の wiki 取り込み
@@ -33,8 +33,9 @@ description: "Slide-deck-specialized wiki ingest. Use when the source is a slide
 
 スライドが3件以上渡されたら、ユーザーが並行処理を指示しなくても**既定で subagent 並行モード**で処理する。プロトコルは汎用 `wiki-ingest` スキルの「Batch Ingest › Parallel mode」節に従う。本スキル固有の要点:
 
-- subagent 1体につきデッキ1件。wiki ページ書き込みは lock 必須
-- 共有カタログ(`wiki/index.md`・各 `_index.md`・`hot.md`・`log.md`・`overview.md`・`.raw/.manifest.json`)と address allocator は subagent からは触らない。オーケストレータが全 subagent 完了後に **`wiki-catalog.py`**(prepend-log / prepend-hot / prepend-changelog / add-catalog-line / prepend-master)で一括更新する(Read/Edit しない)
+- subagent 1体につきデッキ1件。wiki ページ書き込みはヘルパー経由(ロックはヘルパーが取る)
+- 共有カタログ(`wiki/index.md`・各 `_index.md`・`hot.md`・`log.md`・`overview.md`・`.raw/.manifest.json`)は subagent からは触らない。オーケストレータが全 subagent 完了後に **`wiki-catalog.py`**(prepend-log / prepend-hot / prepend-changelog / add-catalog-line / prepend-master)で一括更新する(Read/Edit しない)
+- 各 subagent は新規ページを `wiki-page-write.py` 経由で作り、自分の分をその場で採番する(直列化不要)。`scripts/allocate-address.sh` は直接実行しない。新規ページを Write ツールで作らない(`address:` が付かない)
 - PDF 取得・`pdftoppm` の全ページ画像化・文字起こしは CPU/ネットワーク負荷が大きい。同時実行は 3〜4 体までに抑える
 - log エントリはデッキごとに1つずつ、commit は最後に1回
 
@@ -201,15 +202,16 @@ PDF 抽出テキストは、用語検索・見出し確認・ページ対応の�
 
 ## Step 3: 再取り込み判定
 
-`fetch-slide-deck.sh` はスライドを取得・配置するが、**slug ディレクトリが既存の場合は既定で停止**する。この物理ゲートとは別に、manifest による**セマンティックゲート**を設ける。ヘルパー実行後に `.raw/.manifest.json` を確認し、同ハッシュの既取り込みエントリがあれば wiki ページの新規作成・更新をスキップする。キーは PDF パス。
+`fetch-slide-deck.sh` はスライドを取得・配置するが、**slug ディレクトリが既存の場合は既定で停止**する。この物理ゲートとは別に、manifest による**セマンティックゲート**を設ける。ヘルパー実行後に `.raw/.manifest.json` の記録を確認し、同ハッシュの既取り込みエントリがあれば wiki ページの新規作成・更新をスキップする。キーは PDF パス。manifest は 2 MB を超え、他セッションも書き込むので、Read したり手で書き戻したりしない。`scripts/wiki-manifest.py` が、ロックの内側で 1 件ずつ読み書きする。
 
 ```bash
 md5 -q .raw/slides/<slug>/<slug>.pdf 2>/dev/null || md5sum .raw/slides/<slug>/<slug>.pdf | cut -d' ' -f1
+python3 scripts/wiki-manifest.py get ".raw/slides/<slug>/<slug>.pdf"     # 終了 3 = 未登録
 ```
 
 - 一致: 「取り込み済み(未変更)。`--force` で再取り込み」と報告してスキップ。
-- 無い/異なる/force: 取り込みを実行。
-- 完了後 `{hash, ingested_at, pages_created, pages_updated, note}` を `.raw/.manifest.json` に記録する。`note` には「transcript なし(Whisper 失敗)」「YouTube 字幕で補完」「プレースホルダーメタデータを公式ページから補完」「PDF原本なし、SlideShareのボット対策によりCDN上の個別スライド画像で代替」等の補足を任意で入れる。PDF が存在しないフォールバック取り込みの場合、`hash` には PDF の md5 の代わりに固定文字列(例: `no-pdf-cdn-jpg-fallback`)を入れてよい。
+- 未登録/異なる/force: 取り込みを実行。
+- 完了後 `{hash, ingested_at, pages_created, pages_updated, note}` を `python3 scripts/wiki-manifest.py put ".raw/slides/<slug>/<slug>.pdf" --json '{...}'` で記録する。エントリは manifest の最上位に入り、`put` は既存エントリに欄を上書きで足す。`note` には「transcript なし(Whisper 失敗)」「YouTube 字幕で補完」「プレースホルダーメタデータを公式ページから補完」「PDF原本なし、SlideShareのボット対策によりCDN上の個別スライド画像で代替」等の補足を任意で入れる。PDF が存在しないフォールバック取り込みの場合、`hash` には PDF の md5 の代わりに固定文字列(例: `no-pdf-cdn-jpg-fallback`)を入れてよい。
 
 ---
 
@@ -251,9 +253,11 @@ key_claims:
 
 `date_published` が正確に判明しない場合: 会議の開催期間が分かるなら `YYYY-MM` または `YYYY` を使う。推定でしかない場合は `confidence: medium` に下げ、source ページの限界・不確実点に「発表日は推定」と記録する。
 
-本文の基本形:
+本文の基本形。先頭行に H1 を 1 つだけ置く(frontmatter の `title` と同じ文字列)。H1 が無いと `wiki-page-write.py` が拒否する:
 
 ```markdown
+# {frontmatter の title と同じ文字列}
+
 ## 概要
 資料全体の要約を 2-3 文で書く。
 
@@ -297,13 +301,20 @@ transcript に質疑がある場合だけ作る。
    ![[_attachments/<slug>/page-009.png]]
    ```
 
+新規ページ(source・entity・concept)は Write ツールで直接作らない。本文を一時ファイルに書き、`wiki-page-write.py` で作成する。address の採番・検証・ロックを 1 回で行う(wiki/CLAUDE.md 鉄則 7)。直接 Write すると `address:` が付かず、`wiki-doctor.py` が address の無いページとして報告する。
+
+```bash
+python3 scripts/wiki-page-write.py "wiki/sources/@YYYY__SOURCE__Title.md" --content-file "$TMPDIR/source.md"
+# 複数ページは 1 回にまとめる: python3 scripts/wiki-page-write.py --batch "$TMPDIR/pages.json"
+```
+
 ---
 
 ## Step 5: entity / concept ページを更新する
 
-`wiki-ingest-paper` と同じ規律で、登壇者、組織、製品、システム、リポジトリ、データセットを `wiki/entities/` に作成・更新する。既存の有無は `wiki-resolve.py --type entity` で確認する。**共著者・一度きりの言及は `entity_tier: stub`**(frontmatter + 所属/役割 2〜3 行)。
+`wiki-ingest-paper` と同じ規律で、登壇者、組織、製品、システム、リポジトリ、データセットを `wiki/entities/` に作成・更新する。既存の有無は名前解決で確認する。登場する entity 名と concept 候補を 1 回の呼び出しでまとめて解決する(1 名ずつ呼ばない。呼び出し 1 回が常駐文脈 1 回分の費用になる): `python3 scripts/wiki-resolve.py entity:"<登壇者>" entity:"<所属>" concept:"<候補>" --compact`。`HIT` なら更新、`NONE` なら新規作成。**書き込み直前に、作る予定のページをもう一度 resolve する**(並行セッションが先に作っていることがある)。HIT、または `wiki-page-write.py` が既存ファイルで拒否したら `wiki-append.py` だけを使い、上書きしない。**共著者・一度きりの言及は `entity_tier: stub`**(frontmatter + 所属/役割 2〜3 行)。新規 entity / concept も `wiki-page-write.py` で作る(`--batch` でまとめてよい)。
 
-concept ページは、スライドが扱う重要概念を `wiki/concepts/<原名>.md` に育てる。既存 concept は `wiki-resolve.py --type concept` で確認し、更新時は `wiki-excerpt.py --tail 15 --budget-tokens 1800` で必要節だけ読む。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れは Step 6 の log に `Deferred:` として残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。上限内で触れた concept だけ `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ。同じ受信箱)と `## 未解決の問い` を更新する。主題節と `## 定義` は ingest から書き換えない(conventions §8)。追記の前に `wiki-excerpt.py --outline` で既存の命題を見て、補強・反証する観察なら冒頭に `[節名]` を付ける。単一スライドだけで言える事実は source ページに置き、複数ソースの突き合わせで見えた観察だけを受信箱に入れる。
+concept ページは、スライドが扱う重要概念を `wiki/concepts/<原名>.md` に育てる。既存 concept は上の一括 resolve で確認し、更新時は `wiki-excerpt.py --tail 15 --budget-tokens 1800` で必要節だけ読む。**1 回の取り込みで concept は新規最大 3、更新最大 5。** 溢れは Step 6 の log に `Deferred:` として残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)かつ resolve の出力に `dialect-gate` が無く、`is_create_blocked` でもないときだけ今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。resolve が concept を見つけず `dialect-gate`(`--compact` では `dialect-gate:<n> pages`)を返した候補は新設しない。観察は source に留め、`concept-candidates.py add --reason "dialect-gate"` で台帳に積む。研究関心プロファイル(`wiki-profile.py`)へのマッチ度は新設・保留の判断に使わない(conventions §12 ルール 3)。上限内で触れた concept だけ `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ。同じ受信箱)と `## 未解決の問い` を更新する。主題節と `## 定義` は ingest から書き換えない(conventions §8)。追記の前に `wiki-excerpt.py --outline` で既存の命題を見て、補強・反証する観察なら冒頭に `[節名]` を付ける。単一スライドだけで言える事実は source ページに置き、複数ソースの突き合わせで見えた観察だけを受信箱に入れる。
 
 矛盾があれば黙って上書きせず `> [!contradiction]` callout を新旧両方に立てる。
 
@@ -337,19 +348,29 @@ EOF
 )"
 
 python3 scripts/wiki-catalog.py prepend-changelog \
-  --file wiki/concepts/_index.md --text "### YYYY-MM-DD ingest-slides | タイトル\n- 新規 concept: [[A]]\n"
+  --file wiki/concepts/_index.md --text "$(cat <<'EOF'
+### YYYY-MM-DD ingest-slides | タイトル
+- 新規 concept: [[A]]
+EOF
+)"
 
 python3 scripts/wiki-catalog.py add-catalog-line \
   --file wiki/concepts/_index.md \
   --section "現行コンセプトカタログ" \
   --line "- [[A]]"
 
-python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD ingest-slides | タイトル\n- Source: [[@...]]\n"
+python3 scripts/wiki-catalog.py prepend-master --text "$(cat <<'EOF'
+### YYYY-MM-DD ingest-slides | タイトル
+- Source: [[@...]]
+EOF
+)"
 ```
+
+複数行の `--text` は必ず heredoc で渡す。二重引用符の中の `\n` は改行にならず、カタログに文字のまま入る。
 
 1. 新規 source/entity/concept ごとに、該当 `_index.md` へ `prepend-changelog` + `add-catalog-line`。
 2. 大局が変わったら `wiki/overview.md`(Read/Edit 可)。
-3. `.raw/.manifest.json` に `{hash, ingested_at, pages_created, pages_updated, note}` を記録する。
+3. `.raw/.manifest.json` に `{hash, ingested_at, pages_created, pages_updated, note}` を `wiki-manifest.py put` で記録する(Step 3)。
 4. **BM25 索引の差分更新**(commit 前に必須):
    ```bash
    python3 scripts/wiki-retrieve-refresh.py --pages wiki/sources/@... wiki/entities/... wiki/concepts/... --no-llm
@@ -359,12 +380,23 @@ python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD ingest-sli
 
 ## Step 7: git commit
 
-wiki ページと `.raw/` 原本をひとつのコミットに含める。
+stage の前に、作成・更新したページを機械検査する。frontmatter の必須項目、H1、wikilink と埋め込みの解決、未使用の attachment を 1 回で見る。error が 0 になってから stage する。
 
 ```bash
-git add wiki/ .raw/
-git commit -m "wiki: ingest-slides | <スライドタイトル>"
+python3 scripts/wiki-verify-ingest.py --pages "wiki/sources/@YYYY__SOURCE__Title.md" --attachments-slug <slug>
 ```
+
+今回の ingest で作成・更新した具体ファイルだけを stage する。`git add wiki/ .raw/` のような広い指定は使わない(無関係な未コミット変更や並行セッションの差分を巻き込むため)。
+
+```bash
+git add -- <作成・更新したファイル一覧>
+git add -f .vault-meta/concept-candidates.json   # 候補台帳に積んだときだけ
+git commit -m "wiki: ingest-slides | <スライドタイトル>" -- <stage したのと同じパス>
+```
+
+- stage する対象は、wiki ページ、`wiki/sources/_attachments/<slug>/`、`.raw/slides/<slug>/` の新規素材、`.raw/.manifest.json`、`wiki/index.md`・`wiki/hot.md`・`wiki/log.md`、更新した `_index.md` である。
+- `.vault-meta/` は `.gitignore` の対象だが、台帳は追跡されている。`-f` を付けないと `git add` 全体が ignored で止まる。
+- `git commit` にも stage したのと同じパスを渡して対象を限定する(wiki/CLAUDE.md 鉄則 8)。並行セッションが stage した変更を巻き込まないためである。
 
 コミットメッセージの形式: `wiki: ingest-slides | <スライドタイトル>`。タイトルは source ページの `title:` フィールドの値をそのまま使う。
 
@@ -372,24 +404,7 @@ git commit -m "wiki: ingest-slides | <スライドタイトル>"
 
 ## ロック手順
 
-wiki ページを書き込む前後で per-file lock を使う。
-
-```bash
-if bash scripts/wiki-lock.sh acquire wiki/concepts/Example.md; then
-  # Write/Edit
-  bash scripts/wiki-lock.sh release wiki/concepts/Example.md
-else
-  sleep 2
-  bash scripts/wiki-lock.sh acquire wiki/concepts/Example.md && {
-    # write …
-    bash scripts/wiki-lock.sh release wiki/concepts/Example.md
-  } || python3 scripts/wiki-catalog.py prepend-log --text "$(cat <<'EOF'
-## [YYYY-MM-DD] ingest-slides | skipped lock
-- Key insight: skipped wiki/concepts/Example.md (locked).
-EOF
-)"
-fi
-```
+書き込みは `wiki-page-write.py`(新規)と `wiki-append.py`(既存)が内部でロックを取る。ヘルパー呼び出しを `wiki-lock.sh` で包まない(自己デッドロック)。rc=75 なら 2 秒待って同じヘルパーを 1 回だけ再試行し、なお取れなければ `wiki-catalog.py prepend-log` に skipped lock を残す。`wiki-lock.sh acquire` / `release` で囲むのは、ヘルパーで表現できない既存ページの 1 箇所 `Edit` だけである。
 
 ---
 
@@ -398,6 +413,7 @@ fi
 書き終えたら、すべての主張をスライド画像・公式ページ・transcript・PDF 抽出テキストのいずれかに遡及する。検査結果はチャット返信で報告し、source ページ本文に「検証パス」節を書かない。
 
 - 数値・固有名・図表・式はスライド画像で裏取りする。
+- 数値は機械照合もする(conventions §5)。source ページを書いた直後に `python3 scripts/claim-audit.py numbers --source-page "wiki/sources/@YYYY__SOURCE__Title.md"` で、本文の数値を raw の抽出テキスト(`.raw/slides/<slug>/<slug>.txt`、あれば `transcript.md`)に照らす。concept への追記は spec をファイルへ書いてから `--spec <spec.json>` で照らす。終了 1 の `missing` は `rg -n -C2 '<数値>'` で抽出テキストを引き、原文の値に直すか消す。スライド画像からしか読めない値は抽出テキストに無いのが普通なので、画像で確かめたうえで残してよい。
 - transcript-only の主張は口頭説明由来だと分かるようにする。
 - 画像で読めない値、未取得メディア、文字起こし不鮮明箇所は不確実点として報告する。
 - 報告は ✅ 完全に出典裏付けあり / ⚠️ 不確実・要注記 / ℹ️ 推定 に分ける。

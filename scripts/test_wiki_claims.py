@@ -73,6 +73,15 @@ class WikiClaimsTest(unittest.TestCase):
         self.assertEqual(obs["targets"], [])
         self.assertIn("@2022__Z__S3", obs["sources"])
 
+    def test_inbox_observation_picks_up_non_at_source_alias_link(self):
+        (self.vault / "wiki/sources").mkdir(parents=True, exist_ok=True)
+        (self.vault / "wiki/sources/Plain-Guide.md").write_text("---\ntype: source\n---\nbody\n", encoding="utf-8")
+        text = PAGE.replace("- 出典無しの観察。", "- 別名リンクの観察。(Source: [[Plain-Guide|Plain Guide]])")
+        claims = self.wc.extract_claims(self.rel, include_inbox=True, text=text)
+        obs = [c for c in claims if c["kind"] == "observation"]
+        self.assertEqual(len(obs), 2)
+        self.assertEqual(obs[1]["sources"], ["Plain-Guide"])
+
     def test_text_kwarg_does_not_reread_disk(self):
         alt = PAGE.replace("[[H]] は [[I]]", "[[Only]] は [[Here]]")
         (self.vault / self.rel).write_text(
@@ -82,6 +91,38 @@ class WikiClaimsTest(unittest.TestCase):
         claims = self.wc.extract_claims(self.rel, text=alt)
         self.assertEqual(claims[0]["targets"], ["Only", "Here"])
         self.assertNotIn("Disk", claims[0]["targets"])
+
+
+    def test_non_at_sources_hub_entities_and_unverifiable_claims(self):
+        (self.vault / "wiki/sources").mkdir(parents=True)
+        (self.vault / "wiki/entities").mkdir(parents=True)
+        (self.vault / "wiki/sources/Plain-Blog-Post.md").write_text("---\ntype: source\n---\nbody\n", encoding="utf-8")
+        (self.vault / "wiki/entities/Big Survey.md").write_text(
+            "---\ntype: entity\nentity_type: survey\n---\n# Big Survey\n", encoding="utf-8")
+        (self.vault / "wiki/entities/Some Person.md").write_text(
+            "---\ntype: entity\nentity_type: person\n---\n", encoding="utf-8")
+        page = PAGE.replace("## 未編纂の観察", """## 追加
+
+- **@ 無しの source を引く命題。**
+  - 根拠: [[Plain-Blog-Post]] — 記事
+- **ハブ entity だけを引く命題。**
+  - 根拠: [[Big Survey]] — 第 3 章
+- **人物ページしか引かない命題。**
+  - 根拠: [[Some Person]] — 講演
+
+## 未編纂の観察""")
+        claims = {c["claim"]: c for c in self.wc.extract_claims(self.rel, text=page)}
+        plain = claims["@ 無しの source を引く命題。"]
+        self.assertEqual(plain["sources"], ["Plain-Blog-Post"])
+        self.assertFalse(plain["unverifiable"])
+        hub = claims["ハブ entity だけを引く命題。"]
+        self.assertEqual(hub["sources"], [])
+        self.assertEqual(hub["hubs"], ["Big Survey"])
+        self.assertFalse(hub["unverifiable"])
+        person = claims["人物ページしか引かない命題。"]
+        self.assertTrue(person["unverifiable"])
+        self.assertEqual(person["unresolved_links"], ["Some Person"])
+        self.assertNotIn("出典の無い命題は対象にならない。", claims)
 
 
 if __name__ == "__main__":

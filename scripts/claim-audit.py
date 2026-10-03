@@ -20,6 +20,14 @@ source ページ(と、あれば `.raw/` の抽出テキスト)から語彙重�
       不支持・出典に無いと判定した命題に対処した(留保を付けた / 出典を直した)ことを台帳に記す。
   python3 scripts/claim-audit.py report
       台帳の集計を markdown で stdout に出す(lint 用)。
+  python3 scripts/claim-audit.py numbers --pages wiki/concepts/X.md [...] [--include-inbox]
+  python3 scripts/claim-audit.py numbers --spec spec.json
+  python3 scripts/claim-audit.py numbers --source-page "wiki/sources/@....md"
+      数値が出典にあるかを機械的に照合する。--pages は命題行と根拠・反証行(根拠行はその行が引く出典)、
+      --spec は wiki-append の batch spec の観察と問い(追記の前に使う)、--source-page は source ページ本文を
+      自分の raw 抽出テキストに照らす。missing はページにも raw にも無い数値、raw_only はページに無く
+      raw にだけある数値(出典に無いと誤判定しないための印)。どちらも判定ではなく要確認の一覧である。
+      missing があれば終了 1。sample のパケットにも同じ照合結果が `numbers` として付く。
 
 判定語:
   supported       出典の記述が命題を支持する
@@ -49,14 +57,16 @@ import random
 import re
 import sys
 import tempfile
+import unicodedata
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 from wiki_lock import page_lock
-from wiki_claims import extract_claims
+from wiki_claims import evidence_names, extract_claims, source_names
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 
@@ -103,6 +113,16 @@ def atomic_write(path, text):
         except OSError:
             pass
         raise
+
+
+def locked_ledger(fn):
+    """読み込みから保存までを台帳のロックで囲む。並行 record の更新喪失を防ぐ。"""
+    def wrapper(*args, **kwargs):
+        with page_lock(LEDGER_REL):
+            return fn(*args, **kwargs)
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    return wrapper
 
 
 def rel_posix(path):
@@ -196,7 +216,10 @@ def raw_text_paths(fm):
             continue
         cand = VAULT_ROOT / target
         candidates = []
-        if cand.suffix.lower() in RAW_TEXT_SUFFIXES:
+        if cand.is_dir():
+            # ハブ entity は `.raw/theses/<slug>/` を引く。全文テキストは <slug>/<slug>.txt。
+            candidates.append(cand / f"{cand.name}.txt")
+        elif cand.suffix.lower() in RAW_TEXT_SUFFIXES:
             candidates.append(cand)
         else:
             for suf in RAW_TEXT_SUFFIXES:
@@ -207,8 +230,218 @@ def raw_text_paths(fm):
     return out
 
 
+def number_raw_paths(fm):
+    """数値照合に使う raw テキスト。章別の原本(chapters/ch-NN.*)を引く source には、同じ書籍・論文の
+    目次(toc.txt)と全文テキスト(<slug>.txt)も足す。章番号の相互参照と、章の外にある文献表のため。
+    章の原本が PDF だけで抽出テキストが無くても、目次と全文テキストがあればそれに照らす。"""
+    out = raw_text_paths(fm)
+    chapter_dirs = [c.parent for c in out if c.parent.name == "chapters"]
+    for item in STATS.as_list(fm.get("sources")):
+        target = (STATS.wikilink_target(item) or str(item)).strip().strip('"')
+        if target.startswith(".raw/") and Path(target).parent.name == "chapters":
+            chapter_dirs.append(VAULT_ROOT / Path(target).parent)
+    for d in chapter_dirs:
+        root = d.parent
+        for extra in (root / "toc.txt", root / f"{root.name}.txt"):
+            if extra.is_file() and extra not in out:
+                out.append(extra)
+    return out
+
+
+def hub_packet(name, claim):
+    """博士論文・サーベイ・書籍のハブ entity。章別 source が根拠に無いときの代替で、抜粋は要約水準。"""
+    page = VAULT_ROOT / "wiki" / "entities" / f"{name}.md"
+    try:
+        text = page.read_text(encoding="utf-8")
+    except OSError:
+        return {"source": name, "page": None, "status": "source_missing", "page_excerpts": [],
+                "raw_text": None, "raw_excerpts": []}
+    _, body = STATS.split_frontmatter(text)
+    return {"source": name, "page": rel_posix(page), "status": "hub",
+            "page_excerpts": rank_paragraphs(claim["claim"], bullet_aware_paragraphs(body)),
+            "raw_text": None, "raw_excerpts": []}
+
+
+# --------------------------------------------------------------------------- 数値の照合
+
+# 数値として読まない部分。wikilink(出典名の年)、コード、URL、ISO 日付、頁番号。
+NUM_BLANK_RE = re.compile(
+    r"!?\[\[[^\]]*\]\]|`[^`]*`|\]\([^)]*\)|https?://\S+|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\bpp?\.\s*\d+(?:\s*[-–]\s*\d+)?|\b10\.\d{4,}/\S+|\b\d{4}\.\d{4,5}(?:v\d+)?\b"
+)
+# 著者年の引用(Salfner+ 2010、Zhang et al. 2024、Cook (1998))。数値の主張ではなく文献の名指しなので、
+# 照合する側(命題・根拠・観察)でだけ読まない。出典側で消すと文献表の刊行年が照合に使えなくなる。
+CITATION_RE = re.compile(
+    r"[A-Za-z]\+\s?\(?(?:19|20)\d{2}\)?|\bet al\.?,?\s*\(?(?:19|20)\d{2}\)?"
+    r"|\b[A-Z][A-Za-z\-]+\s\((?:19|20)\d{2}\)"
+)
+# 図表キャプション。数値は画像から読んだもので抽出テキストに無いのが普通なので、missing と分けて返す。
+CAPTION_RE = re.compile(r"^\(?(?:Figure|Fig\.|Table|図|表)\s*\d")
+# 3.3.2 のような節番号は字面で、それ以外は値で照合する。英字直後の数字(H100, GPT4, v2)は識別子なので拾わない。
+NUM_RE = re.compile(
+    r"(?<![A-Za-z0-9.])"
+    r"(\d+(?:\.\d+){2,}|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"
+    r"(?![0-9])\s*(%|[kKMB](?![A-Za-z])|万|億|(?i:thousand|million|billion)\b)?"
+)
+NUM_SCALE = {"k": 10**3, "K": 10**3, "M": 10**6, "B": 10**9, "万": 10**4, "億": 10**8,
+             "thousand": 10**3, "million": 10**6, "billion": 10**9}
+CHECKED_EVIDENCE = ("根拠", "反証")
+
+
+def _canon(d):
+    s = format(d.normalize(), "f")
+    return s[:-2] if s.endswith(".0") else s
+
+
+# 年の範囲表記で後ろの年を下 2 桁に省略した形(1984〜86 年、2019-21)。NFKC の後なので「〜」は残り、「～」は「~」になる。
+YEAR_RANGE_RE = re.compile(r"(?<![0-9.])((?:1[5-9]|20)\d{2})(\s*[〜~\-–—]\s*)(\d{1,2})(?![0-9.])")
+
+
+def expand_year_ranges(s):
+    """省略した年を展開する(1984〜86 → 1984〜1986)。展開して前の年より後になるときだけ展開する。
+
+    2024-05 のような年月は展開すると 2005 で前の年より前になるので、そのまま残す。
+    """
+    def repl(m):
+        first, sep, short = m.group(1), m.group(2), m.group(3)
+        full = first[: len(first) - len(short)] + short
+        if int(full) <= int(first):
+            return m.group(0)
+        return first + sep + full
+    return YEAR_RANGE_RE.sub(repl, s)
+
+
+def number_mentions(text, source_side=False):
+    """text 中の数値を [(字面, 照合キー集合)] で返す。キーは 1.50 と 1.5、10K と 10000、35% と 0.35 を同一視する。"""
+    s = expand_year_ranges(NUM_BLANK_RE.sub(" ", unicodedata.normalize("NFKC", text)))
+    if not source_side:
+        s = CITATION_RE.sub(" ", s)
+    out = []
+    for m in NUM_RE.finditer(s):
+        num, suffix = m.group(1), m.group(2)
+        if num.count(".") >= 2:
+            out.append((num, {"s:" + num}))
+            continue
+        try:
+            base = Decimal(num.replace(",", ""))
+        except InvalidOperation:
+            continue
+        keys = {_canon(base)}
+        scale = NUM_SCALE.get(suffix) or NUM_SCALE.get((suffix or "").lower())
+        if scale:
+            keys.add(_canon(base * scale))
+        elif suffix == "%":
+            keys.add(_canon(base / 100))
+        out.append((m.group(0).strip(), keys))
+    return out
+
+
+WORD_NUMBERS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+WORD_NUMBERS.update({w: i for i, w in enumerate(
+    "_ first second third fourth fifth sixth seventh eighth ninth tenth".split()) if i})
+WORD_NUMBERS.update({"twice": 2, "double": 2, "triple": 3, "half": 0.5, "dozen": 12})
+WORD_RE = re.compile(r"\b(" + "|".join(WORD_NUMBERS) + r")\b", re.IGNORECASE)
+# source ページで照合しない節。書誌(出版年・版・URL)は抽出テキストに無いことが多い。
+BIBLIO_HEADINGS = ("出典", "論文情報", "書誌情報", "関連")
+
+
+def number_keys(text):
+    """出典側の数値キー。命題は丸めて書くので、小数は桁を落とした値(0.4837 → 0.484, 0.48, 0.5, 0)も持たせる。
+    英語の数詞(two, second, twice)も数値として持たせる。"""
+    keys = {_canon(Decimal(str(WORD_NUMBERS[w.lower()]))) for w in WORD_RE.findall(text)}
+    for _, ks in number_mentions(text, source_side=True):
+        keys |= ks
+        for k in list(ks):
+            if k.startswith("s:") or "." not in k:
+                continue
+            d = Decimal(k)
+            for places in range(len(k.split(".")[1]) - 1, -1, -1):
+                keys.add(_canon(d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)))
+    return keys
+
+
+class NumberHaystack:
+    """source ページと raw 抽出テキストの数値キー集合。出典ごとに 1 回だけ読む。"""
+
+    def __init__(self):
+        self.cache = {}
+
+    def get(self, name):
+        if name in self.cache:
+            return self.cache[name]
+        entry = {"page": set(), "raw": set(), "page_found": False, "raw_available": False}
+        page = resolve_source_page(name) or (VAULT_ROOT / "wiki" / "entities" / f"{name}.md")
+        if page.is_file():
+            try:
+                text = page.read_text(encoding="utf-8")
+                entry["page"] = number_keys(text)
+                entry["page_found"] = True
+                fm, _ = STATS.split_frontmatter(text)
+                for raw in number_raw_paths(fm):
+                    try:
+                        entry["raw"] |= number_keys(raw.read_text(encoding="utf-8", errors="replace"))
+                        entry["raw_available"] = True
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+        self.cache[name] = entry
+        return entry
+
+
+def check_line_numbers(text, sources, haystack, where):
+    """1 行の数値を出典の source ページと raw テキストに照らす。
+
+    返り値の missing は「どの出典のページにも raw にも無い」数値、raw_only は「ページには無く raw にだけある」数値。
+    どちらも判定ではなく要確認の印である(単位換算 200µs / 0.2ms や言い換えは拾えない)。
+    """
+    result = {"checked": 0, "missing": [], "raw_only": []}
+    stacks = [haystack.get(s) for s in sources]
+    stacks = [h for h in stacks if h["page_found"]]
+    if not stacks:
+        return result
+    # 引いた出典名の年(@2016__...)は、その出典の刊行年として照合済みとみなす
+    cited_years = {m.group(1) for m in (re.match(r"@((?:19|20)\d{2})__", s) for s in sources) if m}
+    for literal, keys in number_mentions(text):
+        result["checked"] += 1
+        if literal in cited_years:
+            continue
+        in_page = any(keys & h["page"] for h in stacks)
+        in_raw = any(keys & h["raw"] for h in stacks)
+        item = {"where": where, "number": literal, "sources": list(sources)}
+        if not in_page and not in_raw:
+            item["raw_available"] = any(h["raw_available"] for h in stacks)
+            result["missing"].append(item)
+        elif not in_page:
+            result["raw_only"].append(item)
+    return result
+
+
+def _merge(acc, part):
+    acc["checked"] += part["checked"]
+    acc["missing"].extend(part["missing"])
+    acc["raw_only"].extend(part["raw_only"])
+    return acc
+
+
+def claim_numbers(claim, haystack):
+    """命題行と根拠・反証行の数値を照合する。根拠行はその行が引く出典、引かなければ命題の出典全体に照らす。"""
+    acc = {"checked": 0, "missing": [], "raw_only": []}
+    everything = list(claim["sources"]) + list(claim.get("hubs", []))
+    _merge(acc, check_line_numbers(claim["claim"], everything, haystack, "命題"))
+    for i, line in enumerate(claim.get("evidence_lines", [])):
+        label = line[2:].split(":", 1)[0].strip() if line.startswith("- ") else ""
+        if label not in CHECKED_EVIDENCE:
+            continue
+        s_names, h_names, _ = evidence_names(line)
+        cited = s_names + h_names or everything
+        _merge(acc, check_line_numbers(line, cited, haystack, f"{label}[{i}]"))
+    return acc
+
+
 def evidence_packet(claim):
-    packet = []
+    packet = [hub_packet(name, claim) for name in claim.get("hubs", [])]
     for name in claim["sources"]:
         page = resolve_source_page(name)
         if page is None:
@@ -294,6 +527,7 @@ def recompiled_pages(limit):
 
 def sample(pages, per_page, include_inbox, reaudit, rng):
     ledger = load_ledger()
+    haystack = NumberHaystack()
     audited = set(ledger["verdicts"])
     out = []
     skipped = 0
@@ -307,8 +541,80 @@ def sample(pages, per_page, include_inbox, reaudit, rng):
             rng.shuffle(claims)
         for c in claims[:per_page]:
             c["evidence"] = evidence_packet(c)
+            c["numbers"] = claim_numbers(c, haystack)
             out.append(c)
     return out, skipped
+
+
+# --------------------------------------------------------------------------- numbers
+
+def numbers_for_pages(pages, include_inbox):
+    haystack = NumberHaystack()
+    rows, checked = [], 0
+    for rel in pages:
+        for c in extract_claims(rel, include_inbox=include_inbox):
+            res = claim_numbers(c, haystack)
+            checked += res["checked"]
+            if res["missing"] or res["raw_only"]:
+                rows.append({"id": c["id"], "page": c["page"], "line": c["line"], "claim": c["claim"],
+                             "missing": res["missing"], "raw_only": res["raw_only"]})
+    return {"checked": checked, "claims": rows}
+
+
+def numbers_for_spec(spec_path):
+    """wiki-append の batch spec にある観察と問いを、その行が引く出典に照らす(追記の前に使う)。"""
+    items = json.loads(Path(spec_path).read_text(encoding="utf-8"))
+    if isinstance(items, dict):
+        items = [items]
+    haystack = NumberHaystack()
+    rows, checked, unsourced = [], 0, 0
+    for op in items:
+        for key in ("observations", "questions_add"):
+            for i, line in enumerate(op.get(key) or []):
+                s_names, h_names, _ = evidence_names(line)
+                cited = s_names + h_names
+                if not cited:
+                    unsourced += 1
+                    continue
+                res = check_line_numbers(line, cited, haystack, f"{key}[{i}]")
+                checked += res["checked"]
+                if res["missing"] or res["raw_only"]:
+                    rows.append({"page": op.get("page", ""), "text": line,
+                                 "missing": res["missing"], "raw_only": res["raw_only"]})
+    return {"checked": checked, "unsourced_lines": unsourced, "lines": rows}
+
+
+def numbers_for_source_page(rel):
+    """source ページ本文(key_claims を含む)の数値のうち、raw 抽出テキストに無いものを行番号つきで返す。"""
+    path = VAULT_ROOT / rel
+    text = path.read_text(encoding="utf-8")
+    fm, _ = STATS.split_frontmatter(text)
+    raw_keys, raws = set(), []
+    for raw in number_raw_paths(fm):
+        try:
+            raw_keys |= number_keys(raw.read_text(encoding="utf-8", errors="replace"))
+            raws.append(rel_posix(raw))
+        except OSError:
+            pass
+    out = {"page": rel_posix(path), "raw_text": raws, "checked": 0, "missing": [], "caption_missing": []}
+    if not raws:
+        return out
+    _, body = STATS.split_frontmatter(text)
+    offset = len(text.splitlines()) - len(body.splitlines())
+    rows = [("key_claims", str(kc)) for kc in STATS.as_list(fm.get("key_claims"))]
+    heading = ""
+    for n, line in enumerate(body.splitlines(), 1):
+        if line.startswith("## "):
+            heading = line[3:].strip()
+        elif heading not in BIBLIO_HEADINGS:
+            rows.append((offset + n, line))
+    for where, line in rows:
+        for literal, keys in number_mentions(line):
+            out["checked"] += 1
+            if not keys & raw_keys:
+                bucket = "caption_missing" if CAPTION_RE.match(line.strip()) else "missing"
+                out[bucket].append({"line": where, "number": literal, "text": line.strip()[:160]})
+    return out
 
 
 # --------------------------------------------------------------------------- record / report
@@ -366,6 +672,7 @@ def render_report(day, entries):
     return "\n".join(lines)
 
 
+@locked_ledger
 def record(verdicts_path, by):
     path = Path(verdicts_path)
     if not path.is_file():
@@ -412,6 +719,7 @@ def record(verdicts_path, by):
             "ledger": LEDGER_REL, "today_total": len(todays)}, EXIT_OK
 
 
+@locked_ledger
 def resolve(cid, note):
     ledger = load_ledger()
     entry = ledger["verdicts"].get(cid)
@@ -475,6 +783,13 @@ def main(argv=None):
 
     sub.add_parser("report")
 
+    p = sub.add_parser("numbers", help="数値が出典の source ページか raw 抽出テキストにあるかを照合する")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--pages", nargs="+", help="concept ページの命題行と根拠・反証行")
+    g.add_argument("--spec", help="wiki-append の batch spec(observations / questions_add)")
+    g.add_argument("--source-page", help="source ページ本文を自分の raw 抽出テキストに照らす")
+    p.add_argument("--include-inbox", action="store_true", help="--pages で受信箱の観察も対象にする")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "sample":
@@ -502,6 +817,11 @@ def main(argv=None):
             pages = pool[: args.random]
         claims, skipped = sample(pages, args.per_page, args.include_inbox, args.reaudit, rng)
         log(f"claim-audit: {len(claims)} claim(s) from {len(pages)} page(s); {skipped} already audited")
+        hub_only = sum(1 for c in claims if c.get("hubs") and not c["sources"])
+        unverifiable = sum(1 for c in claims if c.get("unverifiable"))
+        if hub_only or unverifiable:
+            log(f"claim-audit: WARN {hub_only} claim(s) rest only on hub entities (status=hub), "
+                f"{unverifiable} claim(s) have 根拠 lines but no verifiable source (judge source_missing)")
         print(json.dumps({"generated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                           "pages": pages, "claims": claims}, ensure_ascii=False, indent=2))
         return EXIT_OK
@@ -518,6 +838,36 @@ def main(argv=None):
         if out is not None:
             print(json.dumps(out, ensure_ascii=False))
         return code
+
+    if args.cmd == "numbers":
+        if args.pages:
+            pages = []
+            for raw in args.pages:
+                rel = raw if raw.startswith("wiki/") else f"wiki/concepts/{raw.removesuffix('.md')}.md"
+                if not (VAULT_ROOT / rel).is_file():
+                    log(f"ERR: page not found: {rel}")
+                    return EXIT_MISSING
+                pages.append(rel)
+            out = numbers_for_pages(pages, args.include_inbox)
+            missing = sum(len(r["missing"]) for r in out["claims"])
+        else:
+            target = args.spec or args.source_page
+            if not (Path(target).is_file() or (VAULT_ROOT / target).is_file()):
+                log(f"ERR: not found: {target}")
+                return EXIT_MISSING
+            if args.spec:
+                spec = target if Path(target).is_file() else VAULT_ROOT / target
+                out = numbers_for_spec(spec)
+                missing = sum(len(r["missing"]) for r in out["lines"])
+            else:
+                rel = rel_posix(target if Path(target).is_file() else VAULT_ROOT / target)
+                out = numbers_for_source_page(rel)
+                if not out["raw_text"]:
+                    log("claim-audit: WARN raw 抽出テキストが無いので照合できない")
+                missing = len(out["missing"])
+        log(f"claim-audit: numbers checked {out['checked']}, missing {missing}")
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 1 if missing else EXIT_OK
 
     if args.cmd == "report":
         sys.stdout.write(render_summary(load_ledger()))

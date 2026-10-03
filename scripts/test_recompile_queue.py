@@ -174,5 +174,23 @@ class RecompileQueueTest(unittest.TestCase):
         self.assertIn("Missing pages still in queue: 1", self.run_ok("report").stdout)
 
 
+    def test_concurrent_marks_do_not_lose_updates(self):
+        for i in range(8):
+            self.write(f"wiki/concepts/P{i}.md", concept(f"P{i}", inbox=6))
+        self.run_ok("refresh")
+        env = os.environ.copy()
+        env["WIKI_VAULT_ROOT"] = str(self.vault)
+        procs = [
+            subprocess.Popen([sys.executable, str(SCRIPTS / "recompile-queue.py"), "mark", f"P{i}", "--state", "done"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env, cwd=str(self.vault))
+            for i in range(8)
+        ]
+        for proc in procs:
+            _, err = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0, err)
+        entries = self.queue()["entries"]
+        self.assertEqual([entries[f"wiki/concepts/P{i}.md"]["state"] for i in range(8)], ["done"] * 8)
+
+
 if __name__ == "__main__":
     unittest.main()

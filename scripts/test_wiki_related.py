@@ -36,6 +36,7 @@ SEED17 = "wiki/asks/@2026__MLSys2026__Beyond the Buzz - A Pragmatic Exploration 
 SEED18 = "wiki/briefs/@2026__MLSys2026__Beyond the Buzz - A Pragmatic Exploration of Prefill-Decode Disaggregation in Large Scale Inference.md"
 SEED19 = "wiki/entities/3GPP.md"
 SEED20 = "wiki/entities/OpenTelemetry.md"
+PAGED_HANDBOOK = "wiki/sources/@2025__Modular__LLM Inference Handbook - Chapter 27 PagedAttention.md"
 CANARY = "wiki/sources/@2018__acmqueue__Canary Analysis Service.md"
 
 
@@ -795,14 +796,14 @@ class RelatedLiveSeeds(unittest.TestCase):
     def test_cli_frozen_locks(self):
         code, payload = self.cli(SEED4)
         self.assertEqual(code, 0)
-        self.assertEqual(self.paths(payload, "evidence")[0], SEED11)
+        self.assertEqual(self.paths(payload, "evidence")[:2], [PAGED_HANDBOOK, SEED11])
         self.assertEqual(self.paths(payload, "definition"), [
             "wiki/concepts/KVキャッシュ管理.md",
             "wiki/concepts/LLM推論.md",
         ])
         self.assertEqual(self.paths(payload, "cluster"), [
             "wiki/concepts/Prefill-Decode分離.md",
-            "wiki/concepts/KVキャッシュ量子化.md",
+            "wiki/concepts/Grouped-Query Attention.md",
         ])
         self.assertNotIn("lexical", payload["roles"])
         self.assertNotIn("open_question", payload["roles"])
@@ -858,7 +859,7 @@ class RelatedLiveSeeds(unittest.TestCase):
         self.assertNotIn("seed", self.omit(payload, "cluster"))
         self.assertEqual(self.paths(payload, "cluster"), [
             "wiki/concepts/オブザーバビリティ.md",
-            "wiki/concepts/GPU観測性.md",
+            "wiki/concepts/トレースサンプリング.md",
         ])
 
     def test_hub_collapse_does_not_empty_large_residual(self):
@@ -913,20 +914,20 @@ class RelatedLiveSeeds(unittest.TestCase):
         self.assertNotIn("seed", self.omit(payload, "cluster"))
         self.assertEqual(self.paths(payload, "cluster"), [
             "wiki/concepts/オブザーバビリティ.md",
-            "wiki/concepts/GPU観測性.md",
+            "wiki/concepts/トレースサンプリング.md",
         ])
 
     def test_paged_attention_lock(self):
         code, payload = self.go(SEED4)
         self.assertEqual(code, 0)
-        self.assertEqual(self.paths(payload, "evidence")[0], SEED11)
+        self.assertEqual(self.paths(payload, "evidence")[:2], [PAGED_HANDBOOK, SEED11])
         self.assertEqual(self.paths(payload, "definition"), [
             "wiki/concepts/KVキャッシュ管理.md",
             "wiki/concepts/LLM推論.md",
         ])
         self.assertEqual(self.paths(payload, "cluster"), [
             "wiki/concepts/Prefill-Decode分離.md",
-            "wiki/concepts/KVキャッシュ量子化.md",
+            "wiki/concepts/Grouped-Query Attention.md",
         ])
         self.assertNotIn("lexical", payload["roles"])
         self.assertNotIn("open_question", payload["roles"])

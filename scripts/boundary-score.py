@@ -54,7 +54,7 @@ EXCLUDE_FILENAMES = {
     "_index.md", "index.md", "log.md", "hot.md", "overview.md",
     "dashboard.md", "Wiki Map.md", "getting-started.md",
 }
-EXCLUDE_PATH_PREFIXES = ("wiki/folds/", "wiki/meta/", "wiki/asks/", "wiki/briefs/")
+EXCLUDE_PATH_PREFIXES = ("wiki/folds/", "wiki/meta/", "wiki/asks/", "wiki/briefs/", "wiki/log/")
 
 RECENCY_HALFLIFE_DAYS = 30.0
 # No recency floor: a truly stale page should NOT dominate the frontier

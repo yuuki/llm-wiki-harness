@@ -5,7 +5,7 @@ description: "wiki のギャップ(wiki-gap の real-gap)や判定で閉じな�
 
 # wiki-ideate: ギャップから着想を起こし、新規性を照合する
 
-`wiki-gap` は文献推薦で止まり、`wiki-thesis` は判定で止まる。どちらも「ここに研究の余地がある」と言った先が無い。本 skill はその継ぎ目を担う。入力はギャップか閉じなかった命題か未解決の問いの 1 つ、出力は着想ノート 1 枚(既定は `research/ideas/<題>.md`)と、出自の wiki ページへの 1 行である。`research/ideas/` が無い vault では、承認後も `/tmp` に置いて場所を報告する。
+`wiki-gap` は文献推薦で止まり、`wiki-thesis` は判定で止まる。どちらも「ここに研究の余地がある」と言った先が無く、着想ノートは wiki から切れている。本 skill はその継ぎ目を担う。入力はギャップか閉じなかった命題か未解決の問いの 1 つ、出力は着想ノート 1 枚(既定は `research/ideas/<題>.md` の新規ノート)と、出自の wiki ページへの 1 行である。`research/ideas/` が無い vault では、承認後も `$TMPDIR` に置いて場所を報告する。
 
 **やらないこと**: 実験計画の実行、コードの生成、論文の下書き、複数の着想の量産。1 回の起動で 1 本に絞る。着想の候補を 3 本まで並べるのは選ぶためであり、書き残すのは選んだ 1 本だけである。
 
@@ -37,7 +37,7 @@ description: "wiki のギャップ(wiki-gap の real-gap)や判定で閉じな�
 1. [`wiki/CLAUDE.md`](../../../wiki/CLAUDE.md)、[`wiki/meta/conventions.md`](../../../wiki/meta/conventions.md) §5(出典)、[`wiki/meta/token-discipline.md`](../../../wiki/meta/token-discipline.md)。`index.md`・`_index.md`・`log.md`・`hot.md` の全文は読まない。
 2. [`wiki/meta/japanese-style.md`](../../../wiki/meta/japanese-style.md) と `japanese-tech-writing` skill。本文は常体、ダッシュ無し。
 3. [`.claude/skills/bibliography-lookup.md`](../bibliography-lookup.md)。外側照合は arXiv が先。DBLP は JSON が返ったときだけ。**検索語は concept 名と論文題名だけ**。文や着想の説明文を検索語にしない。Semantic Scholar Graph API は使わない。
-4. `research/ideas/` がある vault では、そこは人間所有の一次レイヤーである。**既存ノートは読むだけで書き換えない**。新規ファイルを 1 枚足すだけ。ディレクトリが無ければ姉妹検索も保存も行わず、承認後は `/tmp` に置く。
+4. `research/ideas/` がある vault では、そこは人間所有の一次レイヤーである。**既存ノートは読むだけで書き換えない**。新規ファイルを 1 枚足すだけ。ディレクトリが無ければ姉妹検索も保存も行わず、承認後は `$TMPDIR` に置く。
 
 ---
 
@@ -62,8 +62,8 @@ wiki が入力の周辺で何を知り、何を知らないかを確定する。
 ```bash
 python3 scripts/retrieve.py "<入力の主題>" --top 10
 python3 scripts/wiki-excerpt.py "wiki/concepts/<A>.md" --outline
-python3 scripts/wiki-excerpt.py "wiki/concepts/<A>.md" --section "未解決の問い" --budget-tokens 800
-python3 scripts/wiki-excerpt.py "wiki/questions/<thesis>.md" --section "差し戻し" --budget-tokens 600   # thesis 入力のとき
+python3 scripts/wiki-excerpt.py "wiki/concepts/<A>.md" --sections "未解決の問い" --budget-tokens 800
+python3 scripts/wiki-excerpt.py "wiki/questions/<thesis>.md" --sections "差し戻し" --budget-tokens 600   # thesis 入力のとき
 python3 scripts/contradiction-index.py --query "<主題>"                                              # 矛盾があれば着想の種
 ```
 
@@ -146,7 +146,7 @@ curl -sS -m 30 "https://export.arxiv.org/api/query?search_query=all:$(urlencode 
 
 ### フェーズ 5　承認と保存
 
-ユーザーに、着想(フェーズ 3)と新規性判定(フェーズ 4)と保存先ファイル名を示し、**承認を得てから書く**。自律実行で承認が取れないとき、または `research/ideas/` が無いときは、ノートを `/tmp/idea.md` に置いて場所を報告し、一次レイヤーには書かない。
+ユーザーに、着想(フェーズ 3)と新規性判定(フェーズ 4)と保存先ファイル名を示し、**承認を得てから書く**。自律実行で承認が取れないとき、または `research/ideas/` が無いときは、ノートを `$TMPDIR/idea.md` に置いて場所を報告し、一次レイヤーには書かない。
 
 承認後、`research/ideas/` があれば `research/ideas/<題>.md` を新規作成する。題は日本語の名詞句。**同名のファイルがあれば書かず、別の題を提案する。** 既存ノートの形式に合わせた frontmatter に、出自と判定を足す。
 
@@ -172,7 +172,7 @@ closest:
 
 wiki から着想ノートへは**一方向**でつなぐ。出自の種類ごとに 1 行だけ。
 
-- **concept の未解決の問い**: 問いは落とさない(着想は答えではない)。`python3 scripts/wiki-append.py --page "wiki/concepts/<A>.md" --observation "[着想] <問い> から着想 [[<題>]] を起こした(新規性 <判定>、近い仕事 <N> 本)。"`
+- **concept の未解決の問い**: 問いは落とさない(着想は答えではない)。`python3 scripts/wiki-append.py --page "wiki/concepts/<A>.md" --observation "着想: <問い> から [[<題>]] を起こした(新規性 <判定>、近い仕事 <N> 本)。"`(行頭の `[...]` は主題節名の接頭辞として予約されているので使わない。conventions §8 更新ルール 2)
 - **thesis**: 出自の concept があればそこへ同じ 1 行。thesis ページ自体は書き換えない(判定ページは固定節)。
 - **gap-report**: 何も書かない(report は meta であり編集しない)。ギャップの両側の concept のうち、着想が主に育てる側に上の 1 行を足す。
 - **自由な種**: 関係する concept 1 つに同じ 1 行。
@@ -187,20 +187,20 @@ python3 scripts/wiki-catalog.py prepend-log --text "$(cat <<'EOF'
 - Origin: [[<出自ページ>]](<gap|thesis|question|seed>)。逐語: 「<ギャップ行・命題・問い>」
 - Idea: <1 文>
 - Novelty: <novel|incremental|already-done>。近い仕事: <題名 (年, 判定)> ×N。wiki に無い近い仕事: <題名>(wiki-ingest-paper 候補)
-- Output: research/ideas/<題>.md(承認済み / 未承認なら /tmp に置いた旨)
+- Output: research/ideas/<題>.md(承認済み / 未承認なら $TMPDIR に置いた旨)
 - Key insight: <着想を成り立たせる wiki 側の根拠 1 文>
 EOF
 )"
 ```
 
-コミットは `research: add idea <題>`(着想ノート)と `wiki: link idea <題> from <concept>`(出自への 1 行と log)の 2 つに分ける。一次レイヤーと wiki レイヤーを同じコミットに混ぜない。
+コミットは `research: add idea <題>`(着想ノート)と `wiki: link idea <題> from <concept>`(出自への 1 行と log)の 2 つに分ける。一次レイヤーと wiki レイヤーを同じコミットに混ぜない。どちらも、作成・更新したパスだけを `git commit -m "..." -- <パス列挙>` で渡して対象を限定する(wiki/CLAUDE.md 鉄則 8)。
 
 ---
 
 ## やってはいけないこと
 
 - `research/ideas/` の既存ノートを書き換える(読むだけ)。`papers/` `research/` `structures/` `notes/` は温存(CLAUDE.md 鉄則)。
-- 承認なしに `research/ideas/` へ書く。自律実行では `/tmp` に置いて報告する。
+- 承認なしに `research/ideas/` へ書く。自律実行では `$TMPDIR` に置いて報告する。
 - 1 回の起動で 2 本以上の着想ノートを作る。
 - 書誌 API に文や説明を投げる。検索語は concept 名と論文題名だけ。Semantic Scholar Graph API は使わない。
 - 訓練データの知識で新規性を「無い」と断じる。判定は wiki と arXiv(および使えた DBLP / Crossref)の結果に基づき、根拠の無い判定は書かない。

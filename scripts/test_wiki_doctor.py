@@ -95,6 +95,23 @@ class DoctorTest(unittest.TestCase):
             rc = doc.main(["--json", "--only", "address_counter,ledgers,locks,tmp_residue,auto_commit_disabled"])
             self.assertEqual(rc, 0)
 
+    def test_log_rotation_warns_on_older_months(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            make_vault(root)
+            doc = import_script("wiki-doctor", root)
+            (root / "wiki/log.md").write_text(
+                "## [2026-10-02] a\n## 2026-09-30 | b\n## [2026-10-01] c\n", encoding="utf-8")
+            rep = doc.Report()
+            doc.check_log_rotation(rep, {})
+            self.assertEqual(rep.rows[0]["status"], "WARN")
+            self.assertIn("1 件", rep.rows[0]["detail"])
+            self.assertIn("rotate-log --month 2026-10", rep.rows[0]["fix"])
+            (root / "wiki/log.md").write_text("## [2026-10-02] a\n## [2026-10-01] c\n", encoding="utf-8")
+            rep = doc.Report()
+            doc.check_log_rotation(rep, {})
+            self.assertEqual(rep.rows[0]["status"], "OK")
+
     def test_address_scan_includes_companion_pages(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
@@ -119,6 +136,24 @@ class DoctorTest(unittest.TestCase):
             self.assertEqual(by["address_counter"]["status"], "FAIL")
             self.assertIn("重複", by["address_counter"]["detail"])
 
+    def test_knowledge_page_without_address_warns(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            make_vault(root)
+            (root / "wiki/concepts/Beta.md").write_text(
+                "---\ntitle: Beta\ntype: concept\ncreated: 2026-06-03\n---\n# Beta\n",
+                encoding="utf-8")
+            doc = import_script("wiki-doctor", root)
+            ctx = {"pages": list(doc.wiki_pages()),
+                   "cluster_pages": list(doc.cluster_pages()),
+                   "address_pages": list(doc.address_pages())}
+            rep = doc.Report()
+            doc.check_address_counter(rep, ctx)
+            by = {r["check"]: r for r in rep.rows}
+            self.assertEqual(by["address_counter"]["status"], "WARN")
+            self.assertIn("address の無い知識ページ 1 頁", by["address_counter"]["detail"])
+            self.assertIn("address-backfill.py", by["address_counter"]["fix"])
+
     def test_unknown_check_is_usage_error(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()
@@ -141,6 +176,48 @@ class CompanionIndexTest(unittest.TestCase):
             self.assertEqual(got, {"wiki/sources/@2026__X__A.md"})
             self.assertTrue(prefix.is_companion_page(root / "wiki/briefs/@2026__X__A.md"))
             self.assertFalse(prefix.is_companion_page(root / "wiki/sources/@2026__X__A.md"))
+
+    def test_collect_pages_skips_catalogs_meta_and_log(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            for rel in ("wiki/log.md", "wiki/index.md", "wiki/hot.md", "wiki/overview.md",
+                        "wiki/CLAUDE.md", "wiki/sources/_index.md", "wiki/log/2026-09.md",
+                        "wiki/meta/lint-report.md", "wiki/folds/fold-k4.md",
+                        "wiki/concepts/A.md", "wiki/surveys/S.md"):
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text("# x\n", encoding="utf-8")
+            prefix = import_script("contextual-prefix", root)
+            got = {p.relative_to(root).as_posix() for p in prefix.collect_pages("--all")}
+            self.assertEqual(got, {"wiki/concepts/A.md", "wiki/surveys/S.md"})
+
+    def test_prune_chunks_removes_missing_foreign_and_superseded(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            pages = {
+                "wiki/concepts/A.md": "---\ntype: concept\naddress: c-000001\n---\n# A\n",
+                "wiki/concepts/B.md": "# B\n",
+                "wiki/log.md": "## [2026-10-01] x\n",
+            }
+            for rel, text in pages.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text, encoding="utf-8")
+            prefix = import_script("contextual-prefix", root)
+            syn_b = prefix.derive_synthetic_address(root / "wiki/concepts/B.md")
+            dirs = {"c-000001": "wiki/concepts/A.md", "syn-aaaaaa": "wiki/concepts/A.md",
+                    syn_b: "wiki/concepts/B.md", "syn-bbbbbb": "wiki/log.md",
+                    "c-000099": "wiki/concepts/Gone.md"}
+            for name, page in dirs.items():
+                d = root / ".vault-meta/chunks" / name
+                d.mkdir(parents=True)
+                (d / "chunk-000.json").write_text(json.dumps({"page_path": page}), encoding="utf-8")
+            dry = prefix.prune_chunks(dry_run=True)
+            self.assertEqual(len(list((root / ".vault-meta/chunks").iterdir())), 5)
+            removed = prefix.prune_chunks()
+            self.assertEqual(removed, dry)
+            self.assertEqual(removed, {"superseded": ["syn-aaaaaa"], "not-source": ["syn-bbbbbb"],
+                                       "missing": ["c-000099"]})
+            left = sorted(p.name for p in (root / ".vault-meta/chunks").iterdir())
+            self.assertEqual(left, sorted(["c-000001", syn_b]))
 
     def test_tiling_exclude_lists_include_companions(self):
         for name in ("tiling-check.py", "boundary-score.py"):

@@ -3,8 +3,9 @@
 
 profile.md は人間が所有する。探索順は `WIKI_PROFILE_PATH`(絶対、または vault 相対)、
 `research/curation/profile.md`、`wiki/meta/profile.md`。本スクリプトはそれを**読むだけ**で、
-ingest(concept の新設・保留判断、conventions §12)と query / survey(設問の枠)が
-全文を Read せずに関心の軸を知るための要約器である。profile.md は書き換えない。
+query / survey(設問の枠)と survey のテーマ推薦が全文を Read せずに関心の軸を知るための
+要約器である。concept の新設・保留判断には使わない(conventions §12 ルール 3)。
+profile.md は書き換えない。
 プロファイルが無い vault では終了 3(呼び出し側は関心判定を飛ばす)。
 
 出力(既定、markdown):
@@ -112,9 +113,9 @@ def render(data, max_lines, profile_rel="research/curation/profile.md"):
         lines.append("## 研究の背骨")
         for i, p in enumerate(data["pillars"], 1):
             lines.append(f"{i}. {p}")
-    budget_sections = [("コア関心(concept 新設・保留を後押しする軸)", "core"),
-                       ("周辺関心(source に留めるか、既存 concept の観察に足す)", "adjacent"),
-                       ("対象外(concept を新設しない。source ページで閉じる)", "out_of_scope"),
+    budget_sections = [("コア関心", "core"),
+                       ("周辺関心", "adjacent"),
+                       ("対象外", "out_of_scope"),
                        ("評価の癖(query / survey の枠付け)", "method")]
     remaining = max_lines - len(lines) - 2 * len(budget_sections)
     per = max(1, remaining // max(1, len(budget_sections)))

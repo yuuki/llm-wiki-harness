@@ -1,6 +1,6 @@
 ---
 name: wiki-ingest-thesis
-description: "Thesis/survey-specialized wiki ingest for multi-chapter scholarly documents. Use when the source is a PhD/Master's thesis (dissertation) or a LONG survey/SoK paper (roughly 30+ pages with chapter-like section structure): a university repository PDF, an arXiv survey, a ProQuest dissertation, or a local thesis PDF. Stores the immutable original under `.raw/theses/<slug>/`, splits it by chapter, and files ONE source page PER CHAPTER into `wiki/sources/` plus ONE hub entity page (entity_type: thesis|survey) into `wiki/entities/`. Use this — not wiki-ingest-paper (ordinary papers, short surveys) nor wiki-ingest-book (commercial books) — whenever the material is a dissertation or a chapter-structured long survey. Triggers on: 'この博士論文を wiki に', 'thesis を ingest', 'dissertation を取り込んで', '修士論文を wiki 化', 'このサーベイを章ごとに wiki 化', 'SoK を ingest', 'ingest this survey', 'ingest this thesis'. Unlike wiki-ingest-book, chapter pages do NOT get `publish: false` (open-access scholarly documents)."
+description: "Thesis/survey-specialized wiki ingest for multi-chapter scholarly documents: a PhD/Master's thesis, or a long survey/SoK paper (roughly 30+ pages with chapter-like structure). Stores the immutable original under `.raw/theses/<slug>/`, splits it by chapter, and files one source page per chapter into `wiki/sources/` plus one hub entity (entity_type: thesis|survey) into `wiki/entities/`. Use this instead of wiki-ingest-paper (ordinary papers, short surveys) or wiki-ingest-book (commercial books). Chapter pages do not get `publish: false` (open-access documents). Triggers on: 'この博士論文を wiki に', '修士論文を wiki 化', 'このサーベイを章ごとに wiki 化', 'ingest this thesis', 'ingest this survey'."
 ---
 
 # wiki-ingest-thesis: 博士論文・長編サーベイ特化の wiki 取り込み
@@ -10,11 +10,11 @@ description: "Thesis/survey-specialized wiki ingest for multi-chapter scholarly 
 原本は `.raw/theses/<slug>/` に不変原本として置き、**1 章 = 1 source ページ**を `wiki/sources/` に、**文書全体を表すハブ entity ページを 1 つ**(`entity_type: thesis` または `survey`)を `wiki/entities/` に作る。
 
 > [!important] 最初に必ず読むこと
-> wiki を操作する前に [`wiki/meta/conventions.md`](../../wiki/meta/conventions.md)・[`wiki/meta/japanese-style.md`](../../wiki/meta/japanese-style.md)・[`wiki/meta/token-discipline.md`](../../wiki/meta/token-discipline.md) を読む。**本スキルは多くの工程を [`wiki-ingest-book`](../wiki-ingest-book/SKILL.md) と [`wiki-ingest-paper`](../wiki-ingest-paper/SKILL.md) の節への参照で定義する**ので、参照された節はその場で開いて従う(要約で済ませない)。conventions と食い違ったら conventions が優先。
+> wiki を操作する前に [`wiki/meta/conventions.md`](../../../wiki/meta/conventions.md)・[`wiki/meta/japanese-style.md`](../../../wiki/meta/japanese-style.md)・[`wiki/meta/token-discipline.md`](../../../wiki/meta/token-discipline.md) を読む。**本スキルは多くの工程を [`wiki-ingest-book`](../wiki-ingest-book/SKILL.md) と [`wiki-ingest-paper`](../wiki-ingest-paper/SKILL.md) の節への参照で定義する**ので、参照された節はその場で開いて従う(要約で済ませない)。conventions と食い違ったら conventions が優先。
 >
 > **カタログ類は Read しない**: `wiki/index.md`・`wiki/{sources,entities,concepts}/_index.md`・`wiki/hot.md`・`wiki/log.md` の全文を `Read` してはならない。既存ページの発見は `wiki-resolve.py`、カタログ更新は `wiki-catalog.py`、本文の部分読みは `wiki-excerpt.py` に任せる。
 >
-> 章担当 subagent へ渡す手順は [`references/subagent-brief.md`](references/subagent-brief.md) が正本である。フル SKILL を subagent に渡さない。抽出ファイルの形は book の [`../wiki-ingest-book/references/extract-schema.md`](../wiki-ingest-book/references/extract-schema.md)。書籍側の逸話は [`../wiki-ingest-book/references/fan-out.md`](../wiki-ingest-book/references/fan-out.md)、図表の長い手順は [`../wiki-ingest-book/references/figures.md`](../wiki-ingest-book/references/figures.md)。
+> 章担当 subagent へ渡す手順は、読み手用が book と共通の [`../wiki-ingest-book/references/reader-brief.md`](../wiki-ingest-book/references/reader-brief.md)、書き手用が [`references/subagent-brief.md`](references/subagent-brief.md) である(書き手用は thesis 向けに自己完結しており、book の書き手用を読ませない)。役割ごとに 1 ファイルだけを渡し、フル SKILL を subagent に渡さない。抽出ファイルの形は book の [`../wiki-ingest-book/references/extract-schema.md`](../wiki-ingest-book/references/extract-schema.md)。書籍側の逸話は [`../wiki-ingest-book/references/fan-out.md`](../wiki-ingest-book/references/fan-out.md)、図表の長い手順は [`../wiki-ingest-book/references/figures.md`](../wiki-ingest-book/references/figures.md)。
 
 ---
 
@@ -33,7 +33,7 @@ description: "Thesis/survey-specialized wiki ingest for multi-chapter scholarly 
 - 論文集(proceedings)は論文単位で `wiki-ingest-paper`。
 
 > [!important] 新しいセッションで始める
-> このスキルは**新しいセッション**で起動する。`wiki-ingest-paper` から切り替えた場合、同じチャットで続けない。同じ文脈で章分割すると常駐文脈が 300k を超え `$10` 帯になる。paper セッション側は差し戻して止める。こちらは `/wiki-ingest-thesis <URL>` を新規チャットで始める。
+> このスキルは**新しいセッション**で起動する。`wiki-ingest-paper` から切り替えた場合、同じチャットで続けない。同じ文脈で章分割すると常駐文脈が膨らみ、以降の呼び出しすべての費用が跳ね上がる。paper セッション側は差し戻して止める。こちらは `/wiki-ingest-thesis <URL>` を新規チャットで始める。
 
 > [!note] `publish: false` は付けない(book との明確な違い)
 > 博士論文・サーベイはオープンアクセス(arXiv・機関リポジトリ)が主対象で、章 source ページは自分の言葉による要約なので、book skill と違い `publish:` フィールドを書かない。大学リポジトリ等でライセンスが明示的に厳しい(閲覧限定・転載禁止が明記されている)場合のみ、ユーザーに `publish: false` を付けるか確認する。
@@ -78,7 +78,7 @@ thesis/survey 固有の注意:
 
 ## Step 0.3: 章リスト確定と事前決定(オーケストレータ)
 
-`wiki-ingest-book` Step 0.3 の 7 項目(章リスト確定・全章ページ名の事前決定・バッチ日付の固定・ハブ entity と著者 entity の骨格先行作成・印字ノンブル方針・共通 briefing 1 ファイルと 3 章以上では同じスクラッチの `extracts/`・画像の章別振り分け)を**そのまま踏襲**する。「book entity」は「ハブ entity」に読み替える。thesis/survey 固有の追加:
+`wiki-ingest-book` Step 0.3 の 7 項目(章リスト確定・全章ページ名の事前決定・バッチ日付の固定・ハブ entity と著者 entity の骨格先行作成・印字ノンブル方針・briefing の読み手用・書き手用への分割(3 章以上では同じスクラッチに `extracts/`)・画像の章別振り分け)を**そのまま踏襲**する。「book entity」は「ハブ entity」に読み替える。thesis/survey 固有の追加:
 
 1. **章 ↔ 既出版論文の対応表を作る**。博士論文の各章はしばしば出版済み論文の拡張版で、冒頭の "This chapter is based on ..." 宣言・章末注・序章の publications リストに対応が明記される。まず原本を grep して対応を確定し、次に wiki に ingest 済みの source があるかを照合する:
    ```bash
@@ -92,16 +92,16 @@ thesis/survey 固有の注意:
 
 方式・手順はすべて `wiki-ingest-book` Step 0.5 に従う(300 ページ超は一括抽出せずクロップのみ / 総点数の事前 grep / 機械的な切り出し規則が立つならオーケストレータ 1 パス / `get_image_rects()` 優先とキャプション判別 / スキャン PDF の警告)。読み替えと固有事項:
 
-- パスは `.raw/theses/<slug>/` に読み替える。attachment は `wiki/sources/_attachments/<slug>/ch<NN>-fig<N.M>-<内容>.png`(`token`・`secret` 等を含む名前の禁止も同じ)。
+- パスは `.raw/theses/<slug>/` に読み替える。attachment は `wiki/sources/_attachments/<slug>/ch<NN>-fig<N.M>-<内容>.png`。
 - 選定基準は paper 系の全件主義: **本文が参照している図表は、除外リスト(`wiki-ingest-paper` Step 0.5 §2)に当たるもの以外すべて**章スコープで埋め込む。
-- **サーベイの taxonomy 図・比較表・年表は本スキルの主眼**であり、必ず取り込む。LaTeX PDF の図はベクター描画が多く `image-*.png` に出ないことが普通なので、キャプション座標クロップ(`wiki-ingest-paper` Step 0.5 §1.5)を最初から想定しておく。洋文サーベイはキャプションのコロン記法(`Figure 3: ...`)で分離できることが多い(book §1.7 の tip)。
+- **サーベイの taxonomy 図・比較表・年表は本スキルの主眼**であり、必ず取り込む。LaTeX PDF の図はベクター描画が多く `image-*.png` に出ないことが普通なので、`scripts/crop-paper-figures.py`(`wiki-ingest-paper/references/figures.md`)を最初から想定しておく。洋文サーベイはキャプションのコロン記法(`Figure 3: ...`)で分離できることが多い(book §1.7 の tip)。ページ全幅の手クリップはしない。
 - 埋め込みは本文近傍・図表専用セクション禁止(共通ルール)。
 
 ---
 
 ## 並列 fan-out(3 章以上は読み手と書き手を別起動)
 
-**プロトコルは `wiki-ingest-book` の「並列 fan-out」節と同一**(3 章以上は読み手と書き手を**別起動** / extract は読み手用 briefing と同じスクラッチの `extracts/ch-NN.md` / **extract を `.raw` に置かない** / 書き手起動前に `python3 scripts/wiki-extract-check.py --forbid-raw extracts/*.md` を 1 回かける / **1〜2 章は 1 体可** / briefing は読み手用と書き手用に分ける / git 操作の明示的禁止条項 / ローリング 3〜4 体 / ハブ concept を奪い合う章の直列化は書き手に適用 / 先行章が触った concept の申し送り / 報告の `git status` 照合 / 短い章の 30〜50 行は書き手用)。「book entity」は「ハブ entity」に読み替える。スキーマは [`../wiki-ingest-book/references/extract-schema.md`](../wiki-ingest-book/references/extract-schema.md)。置き場の例: `/tmp/thesis-<slug>/extracts/ch-NN.md`。**subagent の個別プロンプトにはフル SKILL を渡さない。** 読み手には brief の読み手節、書き手には書き手節。固有事項:
+**プロトコルは `wiki-ingest-book` の「並列 fan-out」節と同一**(3 章以上は読み手と書き手を**別起動** / extract は読み手用 briefing と同じスクラッチの `extracts/ch-NN.md` / **extract を `.raw` に置かない** / 書き手起動前に `python3 scripts/wiki-extract-check.py --forbid-raw <scratch>/extracts/*.md` を 1 回かける / **1〜2 章は 1 体可** / briefing は読み手用と書き手用に分ける / git 操作の明示的禁止条項 / ローリング 3〜4 体 / ハブ concept を奪い合う章の直列化は書き手に適用 / 先行章が触った concept の申し送り / 報告の `git status` 照合 / 短い章の 30〜50 行は書き手用)。「book entity」は「ハブ entity」に読み替える。スキーマは [`../wiki-ingest-book/references/extract-schema.md`](../wiki-ingest-book/references/extract-schema.md)。置き場の例: `$TMPDIR/thesis-<slug>/extracts/ch-NN.md`。**subagent の個別プロンプトにはフル SKILL を渡さない。** 読み手には book と共通の `reader-brief.md`、書き手には本 skill の `references/subagent-brief.md`。固有事項:
 
 - **研究章(contribution chapter)は 1 章が論文 1 本相当に重い**。40 ページ超の章には、読み手へ「読了は分割してよいが省略しない」と書く。書き手の本文は 300 行上限、深掘りは concept へ逃がす。
 - **ハブ entity は subagent 禁止**(オーケストレータのみが書く。読み手も書かない)。**ハブ entity は最初から `entity_tier: full`**。共有カタログ(index・hot・log・manifest)も subagent 禁止。fan-out 完了後、**オーケストレータだけが `wiki-catalog.py`**(prepend-log / prepend-hot / prepend-changelog / add-catalog-line / prepend-master)を呼ぶ(Read/Edit しない)。
@@ -111,7 +111,7 @@ thesis/survey 固有の注意:
 
 ## Step 1: 章 source ページを作る(`wiki/sources/`)
 
-3 章以上では書き手が extract と書き手用 briefing から組む。章本文の全文 Read はしない。ピンポイント Read は 1 章あたり最大 2 箇所、各 80 行。超えるなら読み手やり直し。**1〜2 章は 1 体可**で、そのときは従来どおり自章テキストを全部読んでから書く。斜め読みしない。
+3 章以上では書き手が extract と書き手用 briefing から組む。章本文の全文 Read はしない。ピンポイント Read は 1 章あたり最大 2 箇所、各 80 行。超えるなら読み手やり直し。**1〜2 章は 1 体可**で、そのときは自章テキストを全部読んでから書く。斜め読みしない。
 
 ### ファイル名(`@` プレフィックス必須)
 
@@ -139,9 +139,11 @@ related:
 
 ### 本文テンプレート(章の性質で 3 型を使い分ける)
 
-章がどの型かは章題と内容から判断する。迷ったら研究章型に寄せる。いずれも Navigation 行から始める:
+章がどの型かは章題と内容から判断する。迷ったら研究章型に寄せる。いずれも先頭行に H1 を 1 つだけ置き(frontmatter の `title` と同じ文字列。無いと `wiki-page-write.py` が拒否する)、続けて Navigation 行を置く:
 
 ```markdown
+# {frontmatter の title と同じ文字列}
+
 > 前: [[@...Chapter N-1...]] | 次: [[@...Chapter N+1...]] | 全体: [[<題名>]]
 ```
 
@@ -187,7 +189,7 @@ related:
 ## 概要
 文書が何であり、なぜ重要かを 2〜3 文。
 
-> [!abstract] 概要(abstract の日本語訳)
+> [!abstract] 概要
 > {一文ずつ忠実に和訳(Step 0.2)}
 
 ## 書誌情報
@@ -222,10 +224,10 @@ related:
 
 ## Step 3: concept ページ(`wiki/concepts/`)
 
-conventions §8 のとおり(本文は主題別の節で再編纂が書く。ingest の追記先は `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ)と `## 未解決の問い` の 2 節。積み増し原則、contradiction callout。追記の前に `wiki-excerpt.py --outline` で既存の命題を見る)。既存 concept の有無は `wiki-resolve.py concept:"<候補1>" concept:"<候補2>" --compact` で候補語をまとめて確認し、更新時は触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800` で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。**1 文書バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。溢れは log の `Deferred:` に残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)なら今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。新設か保留かで迷う候補は `python3 scripts/wiki-profile.py`(研究関心の要約 25 行、profile 全文は読まない。終了 3 なら関心判定を飛ばす)に照らす。対象外の用語は concept にせず source に留め、コア関心の候補は 2 文書目で優先して新設する(conventions §12 ルール 3)。固有の注記:
+conventions §8 のとおり(本文は主題別の節で再編纂が書く。ingest の追記先は `## 未編纂の観察`(旧名 `## 横断的知見` が残るページではそこ)と `## 未解決の問い` の 2 節。積み増し原則、contradiction callout。追記の前に `wiki-excerpt.py --outline` で既存の命題を見る)。既存 concept の有無は `wiki-resolve.py concept:"<候補1>" concept:"<候補2>" --compact` で候補語をまとめて確認し、更新時は触る concept を並べた `wiki-excerpt.py P1 P2 --tail 15 --budget-tokens 1800` で必要節だけ読む。`--total-budget` を使うなら `N * --budget-tokens` 以上にする。更新上限 5 なら 9000 以上。切れたページは読んだことにしない。**1 文書バッチ(文書全体)で concept は新規最大 3、更新最大 5。** 章ごとにリセットしない。並列 fan-out ではこの枠を章の書き手に配らない。新設する concept と担当章はオーケストレータが決めて書き手用 briefing に名指しし、名指しの無い書き手は新設せず候補を `Deferred:` として報告する。溢れは log の `Deferred:` に残す。台帳にも積む: `python3 scripts/concept-candidates.py add --name <候補> --source "[[@<今回の source>]]" --reason "上限超過"`。`wiki-resolve.py` が `ledger:<名>(<k> docs, pending)` を返した候補は既に保留中なので同じコマンドで言及を足し、`ready`(2 文書以上)かつ resolve の出力に `dialect-gate` が無く、`is_create_blocked` でもないときだけ今回の新規枠で優先して新設し `promote` する(conventions §12 ルール 5)。resolve が concept を見つけず `dialect-gate`(`--compact` では `dialect-gate:<n> pages`)を返した候補は新設しない。観察は source に留め、`concept-candidates.py add --reason "dialect-gate"` で台帳に積む。研究関心プロファイル(`wiki-profile.py`)へのマッチ度は新設・保留の判断に使わない(conventions §12 ルール 3)。固有の注記:
 
 - **サーベイの taxonomy 大分類は concept ページ候補の宝庫**であり、本スキルの主要な収穫。大分類 1 つが既存 concept と重なるなら積み増し、独立主題なら新設する。
-- サーベイの「未解決課題」節は、触れた concept の `## 未解決の問い` にそのまま還流させる(出典付き)。
+- サーベイの「未解決課題」節は、触れた concept の `## 未解決の問い` に問いか未解決点の形で還流させる(出典付き)。サーベイが述べる既知の結論(「X は Y を示した」)は問い節ではなく `## 未編纂の観察` へ書く。`wiki-append.py` は太字の頭で言い切った出典付きの断定を問い節に入れない(conventions §8 更新ルール 2)。
 - 同一文書の複数章は独立ソース扱いでよい(章 A と章 B の突き合わせも受信箱に書ける)。文書全体で複数章の突き合わせが揃った新設 concept は、主題節を最初から立ててよい(見出しは主題の名詞。「知見」「観察」「考察」「まとめ」「横断的」を使わない)。
 
 ---
@@ -237,7 +239,7 @@ conventions §8 のとおり(本文は主題別の節で再編纂が書く。ing
 - Step 3.5 の検証コマンドは `python3 scripts/wiki-verify-ingest.py --glob 'wiki/sources/@YYYY__SOURCE__Title - Chapter*' --attachments-slug <slug> --expect-count N --date YYYY-MM-DD --require-related '[[<ハブ entity 名>]]'`。**`publish: false` は付けないので、`FM-PUBLISH` の warn が出たら惰性で付いた印**として外す。
 - frontmatter 検査項目: `publish: false` の代わりに **`source_type`(thesis|paper)と `related:` のハブ entity リンク**を全章検査する(前者は `FM-STYPE`、後者は `--require-related` が全章分を `FM-RELATED` で見る)。
 - log ラベル: `## [YYYY-MM-DD] ingest-thesis | <題名>`。hot にはハブ entity + 代表章 2〜3 件のみ。
-- manifest キー: `.raw/theses/<slug>`(形式は book と同じ。`chapters_count`・`chapter_pages` を持つ)。
+- manifest キー: `.raw/theses/<slug>`(形式は book と同じ。`chapters_count`・`chapter_pages` を持つ)。読み書きは book と同じく `wiki-manifest.py get` / `put` で行う。
 - commit 前に `wiki-retrieve-refresh.py --pages <作成・更新パス> ... --no-llm` を必ず実行する。
 - commit メッセージ: `wiki: ingest-thesis | <題名>`。
 
@@ -247,17 +249,9 @@ conventions §8 のとおり(本文は主題別の節で再編纂が書く。ing
 
 ## やってはいけないこと
 
-共通則(`wiki-ingest-book`「やってはいけないこと」の全項目を、パスと entity 名を読み替えて適用する)に加えて:
+`wiki-ingest-book` の「やってはいけないこと」を、パスを `.raw/theses/<slug>/`、book entity をハブ entity に読み替えて適用する。**`publish: false` の項だけは適用しない。** thesis 固有の制約は次のとおり。
 
-- **`scripts/allocate-address.sh` を直接実行しない。** 採番はヘルパー外では失敗する。`wiki-page-write.py` がロック内で行う。`cd` だけの Bash も禁止。
-- **新規 source / entity / concept を `Write` ツールで作らない。** 既存なら append。衝突したらマージ復旧せず止める。
-- **シートで番号が付いた attachment を Read しない。** `individual-reads` はシートを除く画像 Read の実数。
-- **`wiki-ingest-paper` セッションの続きで本スキルを完走しない。** 新セッションで始める。
-- **完了報告の計測に `--latest` を使わない。** `--self`(Claude Code / Codex / Cursor の環境変数。失敗時だけ `--session <ID>`)にする。Cursor や Codex 経由を理由にスキップしない。
-- **30 ページ未満のサーベイ・通常論文を勝手に章分割しない**(`wiki-ingest-paper` の領分)。逆に博士論文を 1 source ページに押し込まない。
-- **サーベイの引用文献を機械的に entity 化しない**。節を割いて論じられる代表物のみ。
-- **読み手と書き手を同一 subagent で回さない**(3 章以上)。別起動する。**1〜2 章は 1 体可**。extract を `.raw` に置かない。読み手に wiki を書かせない。書き手起動前に `python3 scripts/wiki-extract-check.py --forbid-raw extracts/*.md` を 1 回かける。`QUOTE-HEAVY` でも書き手を起動しない。
-- **ハブ entity・共有ファイルを subagent から書かない**(オーケストレータのみ)。
-- **章 ↔ 出版論文の対応を照合せずに fan-out しない**。wiki 取り込み済みの論文版との接続と矛盾検出は本スキル固有の価値であり、後付けでは漏れる。
-- **`publish: false` を惰性で付けない**(book の規律を持ち込まない)。付けるのはライセンスが明示的に厳しい場合にユーザーが承認したときだけ。
-- 全ページレンダリング禁止・目次だけから未読章を書かない・報告鵜呑み禁止・広い `git add` 禁止(いずれも book と同じ)。
+- **`publish:` は書かない。** 対象はオープンアクセスの学術文書である。付けるのは、ライセンスが明示的に厳しく、ユーザーが承認したときだけ。
+- **章分割で取り込み直すとき、既存の 1 枚ものの paper source を黙って消さず、併存のまま放置もしない。** 旧ページの `related:` と被リンクを章ページやハブ entity へ張り替えてから削除するか、残す理由を旧ページ冒頭に書く(Step 0)。
+- **サーベイの引用文献を機械的に entity 化しない。** 節を割いて論じられる代表物だけにする。数百ページの量産は後から戻しにくい。
+- **`wiki-ingest-paper` セッションの続きで本スキルを完走しない。** 新しいセッションで始める。

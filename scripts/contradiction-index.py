@@ -70,6 +70,8 @@ QUOTE_LINE_RE = re.compile(r"^\s*((?:>\s*)+)(.*)$")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 STATUS_OVERRIDE_RE = re.compile(r"\(status:\s*(open|explained)\)")
+# 再編纂の退避 callout(`> [!note]- 編纂前の観察 YYYY-MM` など)。中の矛盾 callout は原文の写しである。
+PARKED_RE = re.compile(r"^\s*((?:>\s*)+)\[!note\][-+]?\s*編纂前の")
 
 OPEN_HINTS = (
     "要解決", "要追加検証", "未決着", "決着はついていない", "決着していない", "判別できない",
@@ -183,6 +185,7 @@ def extract_callouts(sub, path, vault=None):
     section = ""
     i = 0
     in_fm = text.startswith("---")
+    parked_depth = None
     while i < len(lines):
         line = lines[i]
         if in_fm:
@@ -193,6 +196,15 @@ def extract_callouts(sub, path, vault=None):
         h = HEADING_RE.match(line)
         if h and len(h.group(1)) >= 2:
             section = h.group(2).strip()
+        pm = PARKED_RE.match(line)
+        if pm:
+            parked_depth = pm.group(1).count(">")
+            i += 1
+            continue
+        if parked_depth is not None:
+            q = QUOTE_LINE_RE.match(line)
+            if not q or q.group(1).count(">") < parked_depth:
+                parked_depth = None
         m = CALLOUT_RE.match(line)
         if not m:
             i += 1
@@ -231,9 +243,25 @@ def extract_callouts(sub, path, vault=None):
             "status": status,
             "status_hint": hint,
             "nested": depth > 1,
+            "parked": parked_depth is not None,
         })
         i = j
-    return out
+    return dedupe_parked(out)
+
+
+def _callout_key(title):
+    return re.sub(r"\s+", " ", STATUS_OVERRIDE_RE.sub("", title)).strip()
+
+
+def dedupe_parked(records):
+    """退避 callout の中の写しを、同じ頁の本文に同じ見出しの callout があれば落とす。
+
+    再編纂は観察に入れ子で付いていた矛盾 callout を命題の直下へ移し、観察の原文は退避 callout に
+    そのまま残す(recompile.md §4)。両方を数えると 1 つの矛盾が 2 件になる。本文側に無い写し
+    (退避にしか残っていない矛盾)は落とさない。
+    """
+    live = {_callout_key(r["title"]) for r in records if not r["parked"]}
+    return [r for r in records if not (r["parked"] and _callout_key(r["title"]) in live)]
 
 
 def collect(types, vault=None):

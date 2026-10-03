@@ -281,6 +281,38 @@ title: "インシデント管理"
         self.assertNotIn("観察 2", r["body"])
         self.assertIn("単純化しすぎ", r["body"])
 
+    def test_parked_copy_is_dropped_when_moved_under_a_proposition(self):
+        # 再編纂が矛盾 callout を命題の直下へ移し、観察の原文を退避したとき、写しは数えない
+        self.write("wiki/concepts/インシデント管理.md", """---
+type: concept
+title: "インシデント管理"
+---
+
+# インシデント管理
+
+## 指揮系統の設計
+
+- **ICS 由来の指揮系統は IT 運用へ移せる。**
+  - 根拠: [[@2016__OReilly__SRE Book - Chapter 14 Managing Incidents]] — 役割の分離
+
+> [!contradiction] ICS 由来モデルの妥当性
+> 一方は有効とし、他方は単純化しすぎだと批判する。(status: open)
+
+## 未編纂の観察
+
+> [!note]- 編纂前の観察 2026-09
+> - 観察 1。
+>
+> > [!contradiction] ICS 由来モデルの妥当性
+> > 一方は有効とし、他方は単純化しすぎだと批判する。
+>
+> - 観察 2。
+""")
+        recs = [r for r in self.records() if r["host"] == "wiki/concepts/インシデント管理.md"]
+        self.assertEqual(len(recs), 1)
+        self.assertFalse(recs[0]["nested"])
+        self.assertEqual(recs[0]["section"], "指揮系統の設計")
+
     def test_path_qualified_and_primary_layer_links(self):
         self.write("wiki/entities/Book.md", """---
 type: entity

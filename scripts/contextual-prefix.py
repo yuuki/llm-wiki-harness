@@ -50,10 +50,11 @@ without DragonScale Mechanism 2 enabled.
 
 Usage:
   contextual-prefix.py PATH               # process a single page
-  contextual-prefix.py --all              # process knowledge wiki/*.md (asks/briefs は除外)
+  contextual-prefix.py --all              # process wiki/{sources,entities,concepts,questions,surveys}/*.md
   contextual-prefix.py PATH --no-llm      # force synthetic-prefix tier 3
   contextual-prefix.py PATH --rebuild     # ignore existing chunks
   contextual-prefix.py PATH --peek        # print what would happen; write nothing
+  contextual-prefix.py --all --prune      # also remove chunk dirs that are not retrieve sources
 
 Exit codes:
   0 — success
@@ -80,13 +81,17 @@ WIKI_DIR = VAULT_ROOT / "wiki"
 META_DIR = VAULT_ROOT / ".vault-meta"
 # source から派生した配布・Q&A ノート。知識の一次ソースではないので BM25 に入れない。
 COMPANION_DIRS = frozenset({"asks", "briefs"})
+# retrieve の対象は知識ページだけ(wiki-doctor.py の KNOWLEDGE_DIRS と同じ)。
+# カタログ(index.md・log.md・hot.md・overview.md・_index.md)、log/、meta/、
+# folds/ は操作の記録や索引であり、query の根拠にしない(token-discipline)。
+KNOWLEDGE_DIRS = frozenset({"sources", "entities", "concepts", "questions", "surveys"})
 CHUNKS_DIR = META_DIR / "chunks"
 
 CHUNK_TARGET_TOKENS = 500  # rough; we approximate via chars/4
 CHUNK_TARGET_CHARS = CHUNK_TARGET_TOKENS * 4
 CHUNK_OVERLAP_CHARS = 200
 
-ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+ANTHROPIC_MODEL = "claude-haiku-4-5"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_TIMEOUT_SEC = 30
 CLAUDE_CLI_TIMEOUT_SEC = 60
@@ -280,7 +285,7 @@ def claude_cli_prefix(page_title, page_body, chunk_text):
     )
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt],
+            ["claude", "-p", "--model", "haiku", prompt],
             capture_output=True,
             text=True,
             timeout=CLAUDE_CLI_TIMEOUT_SEC,
@@ -386,8 +391,10 @@ def process_page(page_path, force_synthetic=False, rebuild=False, peek=False,
         if chunk_path.exists() and not rebuild:
             try:
                 existing = json.loads(chunk_path.read_text(encoding="utf-8"))
+                # パスも比べる: 大文字小文字だけの改名は本文が同じでも page_path を直す
                 if existing.get("body_hash") == body_hash and \
-                   existing.get("page_body_hash") == page_body_hash:
+                   existing.get("page_body_hash") == page_body_hash and \
+                   existing.get("page_path") == str(page_path.relative_to(VAULT_ROOT)):
                     skipped += 1
                     continue
             except (json.JSONDecodeError, OSError):
@@ -436,12 +443,62 @@ def is_companion_page(path):
     return bool(rel.parts) and rel.parts[0] in COMPANION_DIRS
 
 
+def is_retrieve_source(path):
+    """`wiki/<知識ディレクトリ>/<page>.md` だけが retrieve の対象(`_index.md` は除く)。"""
+    try:
+        rel = Path(path).resolve().relative_to(WIKI_DIR.resolve())
+    except ValueError:
+        return False
+    return (len(rel.parts) == 2 and rel.parts[0] in KNOWLEDGE_DIRS
+            and rel.suffix == ".md" and not rel.name.startswith("_"))
+
+
+def expected_address(page_path):
+    fm, _ = parse_frontmatter(read_page(page_path))
+    return fm.get("address") or derive_synthetic_address(page_path)
+
+
+def prune_chunks(dry_run=False):
+    """retrieve の対象でない chunk ディレクトリを消す。
+
+    消すのは、指すページが無いもの、対象外のページ(カタログ・meta など)を指すもの、
+    ページの今の address と食い違うもの(採番前の syn-* や採番し直し前の残骸)。
+    BM25 は chunks/ を全件読むので、残すと query に混ざる。
+    """
+    removed = {}
+    if not CHUNKS_DIR.is_dir():
+        return removed
+    for d in sorted(CHUNKS_DIR.iterdir()):
+        c0 = d / "chunk-000.json"
+        if not d.is_dir() or not c0.is_file():
+            continue
+        try:
+            page_rel = json.loads(c0.read_text(encoding="utf-8")).get("page_path")
+        except (OSError, ValueError):
+            continue
+        if not page_rel:
+            continue
+        page = VAULT_ROOT / page_rel
+        if not page.is_file():
+            reason = "missing"
+        elif not is_retrieve_source(page):
+            reason = "not-source"
+        elif expected_address(page) != d.name:
+            reason = "superseded"
+        else:
+            continue
+        removed.setdefault(reason, []).append(d.name)
+        if not dry_run:
+            shutil.rmtree(d)
+    return removed
+
+
 def collect_pages(target):
     if target == "--all" or target is None:
         return sorted(
             p for p in WIKI_DIR.rglob("*.md")
             if not any(part.startswith(".") for part in p.parts)
-            and not is_companion_page(p)
+            and is_retrieve_source(p)
         )
     p = Path(target)
     if not p.is_absolute():
@@ -464,6 +521,10 @@ def main():
                              "bodies stay on-machine and only the tier-3 synthetic "
                              "prefix is used. Mirror of tiling-check.py's "
                              "--allow-remote-ollama guard.")
+    parser.add_argument("--prune", action="store_true",
+                        help="Remove chunk dirs that are not current retrieve sources "
+                             "(missing pages, catalogs/meta, superseded addresses). "
+                             "With --peek, only report.")
     parser.add_argument("--rebuild", action="store_true",
                         help="Re-process chunks even if body_hash matches.")
     parser.add_argument("--peek", action="store_true",
@@ -500,7 +561,11 @@ def main():
     if companions:
         log("(%d companion pages skipped: wiki/asks|briefs are not retrieve sources)"
             % len(companions))
-        files = [p for p in files if not is_companion_page(p)]
+    others = [p for p in files if not is_retrieve_source(p) and not is_companion_page(p)]
+    if others:
+        log("(%d non-knowledge pages skipped: catalogs, meta, folds and log are not retrieve sources)"
+            % len(others))
+    files = [p for p in files if is_retrieve_source(p)]
     total = len(files)
     total_written = 0
     total_skipped = 0
@@ -517,6 +582,11 @@ def main():
         total_skipped += result["skipped"]
 
     log(f"\nDone. pages={total}  chunks_written={total_written}  chunks_unchanged={total_skipped}")
+    if args.prune:
+        removed = prune_chunks(dry_run=args.peek)
+        counts = {k: len(v) for k, v in sorted(removed.items())}
+        verb = "would prune" if args.peek else "pruned"
+        log(f"{verb} chunk dirs: {counts or 'none'}")
     return EXIT_OK
 
 

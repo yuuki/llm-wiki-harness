@@ -24,7 +24,9 @@ description: "既に wiki に取り込み済みの 1 つの source(`wiki/sources
 | まだ wiki に取り込まれていない論文・記事についての質問 | 該当する `wiki-ingest-*` を先に実行する |
 | Slack 等に貼る配布用の紹介文 | `wiki-brief-source` |
 
-判断に迷ったら「後で `wiki/questions/` や `wiki/questions/`(thesis)に昇格させる価値があるか」を基準にする。無ければ ask でよい。
+判断に迷ったら「後で `wiki/questions/`(wiki-query の回答、または wiki-thesis の判定)に昇格させる価値があるか」を基準にする。無ければ ask でよい。
+
+ask ノートに溜めた質問を後から上の行き先へ渡したときは、ask ノートの当該質問の末尾に `→ 昇格: [[<昇格先のページ>]]` を 1 行残す(conventions §14 ルール 6)。過去の日付節への加筆はこの 1 行だけが例外である。
 
 ## 着手前に読むもの
 
@@ -100,9 +102,9 @@ Navigation: [[index]] | [[wiki/sources/<BASENAME>|<source の短い表示名>(so
 
 `wiki/log.md` は ingest・thesis 判定・survey・maintenance など粒度の大きい操作のための場所である。ask ノートへの 1 問追記のたびに `wiki/log.md` へ記帳しない(token-discipline に反し、log がすぐ埋まる)。ask ノートの追記自体が記録である。
 
-## 既知の環境注意
+## 採番に失敗したとき
 
-`scripts/allocate-address.sh` が要求する `flock` コマンドが無いと、新規ページの address 採番が失敗する。その場合は `.vault-meta/address-counter.txt` を読み、その値を `--address c-NNNNNN --no-allocate` として `wiki-page-write.py` に渡し、成功後にカウンタファイルへ `値+1` を書き戻す。恒久対応(`flock` の導入)は人間の作業として明示的に報告する。
+address の採番は `wiki-page-write.py` がロックの内側で行う。採番が失敗したら(`flock` が見つからない環境など)、ノートは保存せず、チャットの回答だけを返して失敗を 1 行報告する。`.vault-meta/address-counter.txt` を手で読み書きして採番を代行しない。ロックを通らない採番は、並行セッションと番号が重複する。
 
 ## 出力仕様
 

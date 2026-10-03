@@ -182,7 +182,7 @@ class ResolveBatchTest(BatchTestBase):
 
     def test_single_query_stderr_is_legacy_line(self):
         proc = self.resolve("RDMA", "--type", "concept", "--top", "3")
-        self.assertIn("wiki-resolve: 3 candidate(s) for 'RDMA'", proc.stderr)
+        self.assertIn("wiki-resolve: 1 candidate(s) for 'RDMA'", proc.stderr)
 
     def test_multi_query_wraps_results(self):
         proc = self.resolve("RDMA", "異常検知", "--type", "concept")
@@ -265,8 +265,7 @@ class ResolveBatchTest(BatchTestBase):
         self.assertEqual(fields[1], "concept")
         self.assertEqual(fields[2], "HIT")
         cands = fields[3].split("; ")
-        self.assertEqual(len(cands), 3, "--compact の既定 top は 3")
-        self.assertEqual(cands[0], "concepts/RDMA.md(filename 1.00)")
+        self.assertEqual(cands, ["concepts/RDMA.md(via=page)"])
         self.assertNotIn("one_liner", proc.stdout)
         self.assertNotIn("aliases", proc.stdout)
         miss = lines[1].split("\t")
@@ -276,12 +275,13 @@ class ResolveBatchTest(BatchTestBase):
     def test_compact_honours_explicit_top(self):
         proc = self.resolve("concept:RDMA", "--compact", "--top", "5")
         cands = proc.stdout.splitlines()[0].split("\t")[3].split("; ")
-        self.assertEqual(len(cands), 5)
+        self.assertEqual(cands, ["concepts/RDMA.md(via=page)"])
 
     def test_default_top_is_still_eight(self):
         proc = self.resolve("RDMA", "--type", "concept")
         payload = json.loads(proc.stdout)
-        self.assertEqual(len(payload["candidates"]), 5, "RDMA に当たるページは 5 枚")
+        self.assertEqual(len(payload["candidates"]), 1, "concept HIT は lookup の 1 頁だけ")
+        self.assertEqual(payload["candidates"][0]["match"], "page")
 
     def test_paths_only(self):
         proc = self.resolve("concept:RDMA", "concept:存在しない語", "--paths-only", "--top", "2")
@@ -289,15 +289,14 @@ class ResolveBatchTest(BatchTestBase):
         self.assertEqual(proc.stdout.splitlines(), [
             "# RDMA",
             "wiki/concepts/RDMA.md",
-            "wiki/concepts/RoCE.md",
             "# 存在しない語",
         ])
 
     def test_min_score_drops_weak_candidates(self):
         loose = json.loads(self.resolve("RDMA", "--type", "concept").stdout)
-        self.assertIn("substring", [c["match"] for c in loose["candidates"]])
+        self.assertEqual([c["match"] for c in loose["candidates"]], ["page"])
         strict = json.loads(self.resolve("RDMA", "--type", "concept", "--min-score", "0.9").stdout)
-        self.assertNotIn("substring", [c["match"] for c in strict["candidates"]])
+        self.assertEqual([c["match"] for c in strict["candidates"]], ["page"])
         self.assertTrue(strict["candidates"])
 
     def test_compact_and_paths_only_are_exclusive(self):
@@ -392,16 +391,58 @@ class ResolveIndexReuseTest(unittest.TestCase):
 
     def test_one_query_scans_each_dir_once(self):
         scans, alias_scans = self.run_main(["RDMA", "--type", "concept", "--compact"])
-        self.assertEqual(scans, ["wiki/concepts"])
-        self.assertEqual(len(alias_scans), 1)
+        self.assertEqual(scans, [])
+        self.assertEqual(alias_scans, [])
 
     def test_fifty_queries_reuse_the_same_index(self):
         argv = [f"concept:q{i}" for i in range(48)] + ["concept:RDMA", "entity:Hellerstein"]
         scans, alias_scans = self.run_main(argv + ["--compact"])
-        self.assertEqual(sorted(scans), ["wiki/concepts", "wiki/entities"],
-                         "走査はディレクトリごとに 1 回だけ")
+        self.assertEqual(sorted(scans), ["wiki/entities"],
+                         "concept は lookup のみ。filename 走査は entity だけ")
         self.assertEqual(len(alias_scans), 1, "alias 走査はバッチ全体で 1 回")
         self.assertEqual(len(alias_scans[0]), 50, "1 回の走査に全クエリを渡す")
+
+
+class ConceptLookupCompactTest(BatchTestBase):
+    """§11.4 / 11.5 / 11.17 / 11.18: concept compact は lookup と同じ。source は substring を残す。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix="wiki-batch-lookup-"))
+        make_vault(cls.tmp)
+        write(cls.tmp / "wiki" / "concepts" / "オブザーバビリティ.md",
+              concept_page("オブザーバビリティ", ["Observability"]))
+        write(cls.tmp / "wiki" / "concepts" / "可観測性.md",
+              concept_page("可観測性", ["Observability"]))
+        write(cls.tmp / "wiki" / "concepts" / "CI-CDオブザーバビリティ.md",
+              concept_page("CI-CDオブザーバビリティ"))
+        write(cls.tmp / "wiki" / "entities" / "Observability Inc.md",
+              entity_page("Observability Inc", ["Observability"]))
+
+    def test_compact_observability_is_none_not_substring(self):
+        proc = self.resolve("--type", "concept", "--compact", "Observability")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        fields = proc.stdout.splitlines()[0].split("\t")
+        self.assertEqual(fields[:3], ["Observability", "concept", "NONE"])
+        self.assertNotIn("CI-CD", fields[3])
+
+    def test_compact_own_title_is_single_hit(self):
+        proc = self.resolve("--type", "concept", "--compact", "可観測性")
+        fields = proc.stdout.splitlines()[0].split("\t")
+        self.assertEqual(fields[:3], ["可観測性", "concept", "HIT"])
+        self.assertEqual(fields[3], "concepts/可観測性.md(via=page)")
+
+    def test_source_compact_keeps_substring(self):
+        proc = self.resolve("--type", "source", "--compact", "Sample")
+        fields = proc.stdout.splitlines()[0].split("\t")
+        self.assertEqual(fields[:3], ["Sample", "source", "HIT"])
+        self.assertIn("substring", fields[3])
+
+    def test_any_observability_has_no_concept_hit(self):
+        proc = self.resolve("--type", "any", "Observability")
+        payload = json.loads(proc.stdout)
+        self.assertEqual([c for c in payload["candidates"] if c["type"] == "concept"], [])
+        self.assertTrue(any(c["type"] == "entity" for c in payload["candidates"]))
 
 
 class ExcerptBatchTest(BatchTestBase):

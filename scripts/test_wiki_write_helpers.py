@@ -616,6 +616,60 @@ class PageWriteTest(VaultCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertEqual("created", json_lines(proc.stdout)[0]["action"])
 
+    def _rejected_alert_ledger(self):
+        self.write_page("wiki/concepts/アラート管理.md", CONCEPT_PAGE.replace(
+            "試験概念", "アラート管理"))
+        self.write_page(".vault-meta/concept-merges.json", json.dumps({
+            "version": 1,
+            "updated_at": "2026-09-13T00:00:00",
+            "dialects": {
+                "alert": ["alert", "alerts", "アラート"],
+                "alarm": ["alarm", "alarms", "アラーム"],
+            },
+            "dialect_groups": [["alert", "alarm"]],
+            "suffixes": {
+                "correlation": ["correlation", "correlations", "相関"],
+                "management": ["management", "管理"],
+            },
+            "decisions": {
+                "アラーム管理 || アラート管理": {
+                    "state": "rejected",
+                    "keep": "アラート管理",
+                    "drop": "アラーム管理",
+                    "surfaces_keep": ["アラート管理", "Alert Management"],
+                    "surfaces_drop": ["アラーム管理", "Alarm Management"],
+                    "reason": "試験",
+                    "day": "2026-09-13",
+                }
+            },
+        }, ensure_ascii=False, indent=1))
+
+    def test_rejected_drop_surfaces_can_be_created(self):
+        """§11.10: rejected の drop 表層は新設可。keep 表層と --force は不可。"""
+        self._rejected_alert_ledger()
+        proc = run(PAGE_WRITE, ["wiki/concepts/Alarm Management.md", "--no-allocate",
+                                "--content-file", self.content_file(CONCEPT_PAGE)],
+                   self.vault)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        proc = run(PAGE_WRITE, ["wiki/concepts/アラーム管理.md", "--no-allocate",
+                                "--content-file", self.content_file(CONCEPT_PAGE, "b.md")],
+                   self.vault)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        blocked = run(PAGE_WRITE, ["wiki/concepts/Alert Management.md", "--no-allocate",
+                                   "--content-file", self.content_file(CONCEPT_PAGE, "c.md")],
+                      self.vault)
+        self.assertEqual(65, blocked.returncode)
+        err = json_lines(blocked.stdout)[0]["error"]
+        self.assertTrue(any(tok in err for tok in (
+            "dialect-gate:", "alias-collision:", "merged-drop:")))
+        self.assertFalse((self.vault / "wiki/concepts/Alert Management.md").is_file())
+        forced = run(PAGE_WRITE, ["wiki/concepts/Alert Management.md", "--no-allocate",
+                                  "--force",
+                                  "--content-file", self.content_file(CONCEPT_PAGE, "d.md")],
+                     self.vault)
+        self.assertEqual(65, forced.returncode)
+        self.assertFalse((self.vault / "wiki/concepts/Alert Management.md").is_file())
+
 
 class AppendTest(VaultCase):
     REL = "wiki/concepts/試験概念.md"
@@ -773,6 +827,32 @@ class AppendTest(VaultCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         self.assertEqual(1, json_lines(proc.stdout)[0]["added"]["section_append"])
         self.assertIn("- [[@X]] — 要旨", self.section_of(self.read_page(rel), "関連ソース"))
+
+    def test_concept_section_append_refuses_topic_sections(self):
+        proc = self.append(["--section", "分割方式の分類", "--section-line", "- 追記(Source: [[@X]])"])
+        self.assertEqual(65, proc.returncode)
+        self.assertIn("section_append", json_lines(proc.stdout)[0]["error"])
+        self.assertEqual(CONCEPT_PAGE, self.read_page(self.REL))
+        ok = self.append(["--section", "関連", "--section-line", "- 概念: [[別概念]]"])
+        self.assertEqual(0, ok.returncode, ok.stderr)
+
+    def test_question_refuses_cited_proposition_and_warns_on_stray_items(self):
+        proc = self.append(["--question",
+                            "**LatentScope は潜在変数問題を実用化した**: 説明(Source: [[@2026__X__Y]])"])
+        self.assertEqual(65, proc.returncode)
+        self.assertIn("observations", json_lines(proc.stdout)[0]["error"])
+        self.assertEqual(CONCEPT_PAGE, self.read_page(self.REL))
+        warned = self.append(["--question", "PetShop は正常期間で全手法が捏造を示す(Source: [[@2026__X__Y]])"])
+        self.assertEqual(0, warned.returncode, warned.stderr)
+        self.assertTrue(any("問いに見えない" in w for w in json_lines(warned.stdout)[0]["warnings"]))
+        fine = self.append(["--question", "**遅延モデルは QUIC でも成り立つか**: 背景(Source: [[@2026__X__Y]])"])
+        self.assertEqual(0, fine.returncode, fine.stderr)
+        self.assertFalse(any("問いに見えない" in w for w in json_lines(fine.stdout)[0]["warnings"]))
+
+    def test_observation_without_source_link_warns(self):
+        proc = self.append(["--observation", "出典の無い観察"])
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertTrue(any("wikilink" in w for w in json_lines(proc.stdout)[0]["warnings"]))
 
     def test_code_fence_heading_is_not_a_section(self):
         fenced = CONCEPT_PAGE.replace(

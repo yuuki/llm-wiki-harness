@@ -1,6 +1,6 @@
 ---
 name: wiki-refactor
-description: Refactor and maintain the Obsidian LLM wiki layer, especially wiki/concepts. Use this skill whenever the user asks to refactor, consolidate, split, normalize, lint, health-check, or reorganize wiki concepts; merge duplicate concepts; decompose oversized concepts; repair concept frontmatter/headings/sources; sync wiki indexes/logs; or apply Karpathy-style compiled wiki knowledge maintenance.
+description: "Maintain the Obsidian LLM wiki layer by changing page content, mainly under `wiki/concepts/`. Recompiles a concept's inbox (未編纂の観察) into topic sections, re-audits propositions against their sources (claim audit), merges duplicate concepts or entities, splits oversized concepts into parent/child pages, and repairs concept frontmatter, headings and sources. Use it whenever the user asks to refactor, consolidate, split, normalize or reorganize wiki concepts. Japanese triggers include 再編纂して, 受信箱を畳んで, 統合して, 親子化して, 命題を再検証して. Detection-only health checks belong to wiki-lint."
 ---
 
 # Wiki Refactor
@@ -66,7 +66,7 @@ Every concept page must have this body shape (conventions §8):
 ## 出典
 ```
 
-Fixed sections are the six functional ones (`定義` `子概念` `未解決の問い` `未編纂の観察` `関連` `出典`). Everything else between `子概念` and `未解決の問い` is a topic section owned by the recompile step.
+Fixed sections are the six functional ones (`定義` `子概念` `未解決の問い` `未編纂の観察` `関連` `出典`). Everything else between `子概念` and `未解決の問い` is a topic section owned by the recompile step. The scripts also treat bracketed variants of fixed headings (`横断的知見(続き)`, `未解決の問い(追加)`) and reference-list headings (`参照`, `関連ページ`, `主要ソース`, …) as functional, and do not count the empty-inbox placeholder line as an observation (`scripts/wiki_sections.py`).
 
 Topic-section rules (conventions §8 主題節の規則):
 
@@ -99,7 +99,7 @@ Populate `sources` from source links used in `## 出典` or claim provenance. Qu
 
 Use these decisions consistently:
 
-- **統合**: Same concept split by alias, alternate translation, or same-source duplication. Merge into one canonical page, preserve old names in `aliases`, update wikilinks, and delete only when all references are updated.
+- **統合**: Same concept split by alias, alternate translation, or same-source duplication. `concept-resolve.py plan --keep A --drop B` が `merge_kind` を返す。`alias-only`(drop 頁無し)は aliases を足して `decide --merged`。`inbox-append` は受信箱移動。`recompile-keep` は keep の再編纂と drop の `git rm` とリンク張り替えを同一コミットにする(対象ページは keep 1 枚。ingest 中の再編纂は許さない)。リンクは `[[STEM]]` / `[[wiki/concepts/STEM]]` / `[[STEM|表示]]` / `[[STEM#見出し]]` / `[[STEM^block]]` を `re.compile(r"\[\[(?:[^\]|#]*/)?%s(?:[|#^]|\])" % re.escape(STEM))` で拾う。`rg -F '[[STEM'` だけを安全確認にしない。
 - **親子化**: An umbrella concept contains stages, methods, evaluation design, implementation tactics, or domain variants. Keep the parent as a map with `## 子概念`; move concrete arguments into child concept pages. Parent `## 横断的知見` holds only observations that span children.
 - **分解**: A page exceeds roughly 100 lines or contains multiple independent cross-source arguments. Split into focused children and leave the parent with the definition, map, and synthesis.
 - **圧縮**: A concept is mostly single-source fact listing. Keep only the definition, cross-source insight if any, unresolved questions, and source pointers.
@@ -161,7 +161,7 @@ rg --files wiki/concepts -g '*.md'
 rg 'lint-stub' wiki/concepts
 rg '\[\[(OldConceptA|OldConceptB)\]\]' wiki
 rg -n '^## (.*)(知見|観察|考察|まとめ|横断的)' wiki/concepts/<page>.md   # generic headings left after recompile (未編纂の観察 / legacy 横断的知見 are the only allowed hits)
-rg -n '既出|本ページ|本頁|本 wiki' wiki/concepts/<page>.md | rg -v '^[0-9]+:>'   # self-refs must be 0 after recompile (callout lines may hit)
+rg -n '既出|本ページ|本頁|このページ|この頁|本 ?wiki|この ?wiki|本 ?concept|本概念|本 ?vault' wiki/concepts/<page>.md | rg -v '^[0-9]+:>'   # self-refs must be 0 after recompile (callout lines may hit)
 git status --short
 ```
 
@@ -180,7 +180,11 @@ When parsing source filenames, do not use `Path.stem` for source pages with dots
 Prepend a dated entry like:
 
 ```markdown
-2026-06-06: **wiki/concepts リファクタリング** — [[A]] と [[B]] を [[C]] に統合し、[[Parent]] を親ページ化、[[Child1]]・[[Child2]] を分解。lint stub N 件を補完し、concept index と `sources` frontmatter を同期。検証: 必須見出し欠落 0、index 差分 0、対象旧リンク 0、lint-stub 0。
+## [YYYY-MM-DD] wiki-refactor | <対象>
+- 統合: [[A]]、[[B]] を [[C]] へ
+- 親子化・分解: [[Parent]] を親ページ化し、[[Child1]] と [[Child2]] へ分解
+- 補完: lint stub N 件、concept index と `sources` frontmatter を同期
+- 検証: 必須見出し欠落 0、index 差分 0、対象旧リンク 0、lint-stub 0
 ```
 
 Use plain text for obsolete page names if keeping historical names as wikilinks would break the current verification target.
@@ -192,6 +196,7 @@ Recompile entries name the page, the fold ratio, and the resulting sections:
 - Page: [[eBPF]]
 - Folded: 30 観察 → 11 命題 / 4 主題節(verifier の保証範囲, カーネル拡張面としての struct_ops, 観測から制御への重心移動, 表現力と検証可能性の緊張)
 - Kept in inbox: 2 (単一ソース・要再確認)
+- Moved to questions: 1
 - Parked: `> [!note]- 編纂前の観察 2026-09`(30 件)
 - Summary paragraph: rewritten
 ```
@@ -200,8 +205,8 @@ Recompile entries name the page, the fold ratio, and the resulting sections:
 
 - Do not make every page a parent page. Parent pages are maps; children are concrete arguments.
 - Do not hide contradictions by merging prose. Use contradiction callouts or unresolved questions.
-- Do not recompile from an ingest session, and do not batch several pages into one recompile commit. One page = one commit.
-- Do not start a recompile without `recompile-queue.py mark <page> --state in_progress`, and do not close one without `--state done`; a rejection with no `--reason` is useless to the next attempt.
+- Do not recompile from an ingest session, and do not batch several pages into one recompile commit. One page = one commit. Exception: `merge_kind=recompile-keep` は keep の再編纂と drop の `git rm` とリンク張り替えを同一コミットにする。対象は keep 1 枚。drop は消える。
+- Do not start a recompile without `recompile-queue.py mark <page> --state in_progress`, and do not close one without `--state done` (close it with `scripts/recompile-finalize.sh`, which records ledgers before the non-fatal index refresh; see `references/recompile.md` §7); a rejection with no `--reason` is useless to the next attempt.
 - Do not drop a `(Source: ...)` while folding. Every claim keeps every source its folded observations cited.
 - Do not rewrite topic sections during 統合 / 親子化 / 分解 without also applying the recompile traces; structural moves that reword claims are recompiles.
 - Do not let index summaries contain nested wikilinks that break list parsing.

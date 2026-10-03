@@ -128,7 +128,7 @@ fi
 
 PDF="${DEST_DIR}/${SLUG}.pdf"
 TXT="${DEST_DIR}/${SLUG}.txt"
-WORK_PDF="$(mktemp "${TMPDIR:-/tmp}/fetch-paper-pdf.XXXXXX.pdf")"
+WORK_PDF="$(mktemp "${TMPDIR:-/tmp}/fetch-paper-pdf.XXXXXX")"
 trap 'rm -f "$WORK_PDF"' EXIT
 
 # --- 取得 -------------------------------------------------------------------

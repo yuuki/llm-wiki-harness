@@ -2,34 +2,23 @@
 name: wiki-lint
 description: >
   Health check the Obsidian wiki vault. Finds orphan pages, dead wikilinks, stale claims,
-  missing cross-references, frontmatter gaps, and empty sections. Creates or updates
-  Dataview dashboards. Generates canvas maps. Triggers on: "lint", "health check",
-  "clean up wiki", "check the wiki", "wiki maintenance", "find orphans", "wiki audit".
+  missing cross-references, frontmatter gaps, and empty sections, and writes a lint
+  report under wiki/meta/. Detects and reports; changes to page content (recompile,
+  merges, splits) belong to wiki-refactor. Triggers on: "lint", "health check",
+  "check the wiki", "wiki maintenance", "find orphans", "wiki audit".
 ---
 
 # wiki-lint: Wiki Health Check
 
-Run lint after every 10-15 ingests, or weekly. Ask before auto-fixing anything. Output a lint report to `wiki/meta/lint-report-YYYY-MM-DD.md`.
+Run lint after every 10-15 ingests, or weekly. Output a lint report to `wiki/meta/lint-report-YYYY-MM-DD.md`. Lint observes: rebuilding derived caches, reaping stale locks, and the `paper-ids.py backfill` of frontmatter IDs are applied without asking; any fix that changes page content is shown in the report first and applied only after the user confirms (see *Before Auto-Fixing*).
 
-> Token discipline: never Read `wiki/index.md`, `wiki/log.md`, `wiki/*/_index.md`, or a historical-sized `wiki/hot.md`. Discover pages with `wiki-resolve.py` / `rg` on content pages. Catalog writes go through `wiki-catalog.py`. See [`wiki/meta/token-discipline.md`](../../wiki/meta/token-discipline.md).
-
----
-
-## Transport (v1.7+)
-
-Lint primarily reads, then writes a single report file. Both follow the standard transport policy. Read `.vault-meta/transport.json` (auto-created by `bash scripts/detect-transport.sh`):
-
-- **cli** — `obsidian-cli read "$VAULT" "$NOTE"` for individual reads; `obsidian-cli backlinks "$VAULT" "$NOTE"` natively handles backlink graph (avoids re-rolling it via Grep); see [`skills/wiki-cli/SKILL.md`](../wiki-cli/SKILL.md)
-- **mcp-obsidian** / **mcpvault** — `mcp__obsidian-vault__read_multiple_notes`, `list_all_tags`
-- **filesystem** — Claude's `Read`/`Glob`/`Grep` (final floor; current v1.6 behavior)
-
-Full decision tree: [`wiki/references/transport-fallback.md`](../../wiki/references/transport-fallback.md). DragonScale Mechanism 3 tiling lint is a separate code path (Python script) and bypasses transport selection.
+> Token discipline: never Read `wiki/index.md`, `wiki/log.md`, `wiki/*/_index.md`, or a historical-sized `wiki/hot.md`. Discover pages with `wiki-resolve.py` / `rg` on content pages. Catalog writes go through `wiki-catalog.py`. See [`wiki/meta/token-discipline.md`](../../../wiki/meta/token-discipline.md).
 
 ---
 
 ## Lint Checks
 
-Work through these in order:
+Run check 18 (doctor) first, then work through 1–17 in order:
 
 1. **Orphan pages**. Wiki pages with no inbound wikilinks. They exist but nothing points to them.
 2. **Dead links**. Wikilinks that reference a page that does not exist.
@@ -39,8 +28,8 @@ Work through these in order:
 6. **Frontmatter gaps**. Pages missing required fields (type, status, created, updated, tags).
 7. **Empty sections**. Headings with no content underneath.
 8. **Missing page files**. From wikilinks collected while scanning **content** pages (not catalogs), confirm each target with `python3 scripts/wiki-resolve.py "<name>" --type any`. Empty candidates mean a dead link. Do **not** Read `wiki/index.md` to hunt stale catalog lines; that file is a human derivative.
-9. **Address validity** (DragonScale Mechanism 2). For every page that has an `address:` frontmatter field, validate the format. See the **Address Validation** section below.
-10. **Semantic tiling** (DragonScale Mechanism 3, opt-in). Flag candidate duplicate pages (across all scanned types, not just concepts) via embedding cosine similarity. See the **Semantic Tiling** section below.
+9. **Address validity**. For every page that has an `address:` frontmatter field, validate the format and the manifest's `address_map`. See the **Address Validation** section below.
+10. **Semantic tiling**. Flag candidate duplicate pages (across all scanned types, not just concepts) via embedding cosine similarity. See the **Semantic Tiling** section below.
 11. **Contradiction index** (conventions §5). Regenerate the index first, then read its counts and the one-sided candidates — never grep callouts by hand:
 
     ```bash
@@ -60,9 +49,10 @@ Work through these in order:
 13. **Claim audit** (sampled, conventions §5). Check that recompiled propositions still say what their cited sources say. Sample, judge each packet per [`wiki-refactor/references/claim-audit.md`](../../../.agents/skills/wiki-refactor/references/claim-audit.md) §2, record, and paste the summary:
 
     ```bash
-    python3 scripts/claim-audit.py sample --recompiled --limit 5 --per-page 2 --seed "$(date +%Y%m%d)" > /tmp/claim-sample.json
-    # judge → /tmp/claim-verdicts.json
-    python3 scripts/claim-audit.py record --verdicts /tmp/claim-verdicts.json
+    W="$(mktemp -d "${TMPDIR:-/tmp}/claim-audit.XXXXXX")"   # per-run dir: fixed names under /tmp collide across parallel sessions
+    python3 scripts/claim-audit.py sample --recompiled --limit 5 --per-page 2 --seed "$(date +%Y%m%d)" > "$W/claim-sample.json"
+    # judge → "$W/claim-verdicts.json"
+    python3 scripts/claim-audit.py record --verdicts "$W/claim-verdicts.json"
     python3 scripts/claim-audit.py report      # paste as ## Claim Audit
     ```
 
@@ -86,21 +76,30 @@ Work through these in order:
 
     Backfill is safe to auto-fix (it only adds frontmatter lines). Duplicate groups and "1 枚もの + 章分割" coexistence are **Needs review**: merge or delete is a human decision (keep the page with more inbound links, move its `related:`, and leave a `related:` bridge if both stay, e.g. a reading-series note next to the original).
 
-16. **Entity aliases** (conventions §12 rule 6). Detect entity pages that name the same person or organisation (English vs Japanese title, legal suffix, `J. Dean` vs `Jeff Dean`, `MIT` vs its full name, alias collisions where one page's title sits in another page's `aliases`):
+16. **Paper ref candidates** (conventions §3). Bibliography identifiers from ingested paper raw texts live in `.vault-meta/paper-ref-candidates.json`. This check runs **after** Paper IDs so the live index exists. It reports ready rows only (pending, demand ≥ 2, not a HIT in the readable paper-ids index). Do **not** run `backfill` here.
+
+    ```bash
+    python3 scripts/paper-refs.py report --write      # stdout + wiki/meta/paper-ref-candidates.md
+    ```
+
+    Paste stdout as ## Paper Ref Candidates. `ready` rows are a proposal for the human (`/wiki-ingest-paper <URL>`), not an automatic ingest. Titles are bibliography leftovers, not API titles; do not invent titles. If report exits 1, write that the ledger is unreadable（台帳が読めない）and continue the rest of lint. If it exits 75, wait 2s and retry the same command once; if still 75, paste stdout and do not `git add` the generated note. Do not reject. Do **not** run `backfill`. If the ledger is new or updated, `git add -f .vault-meta/paper-ref-candidates.json`. If the generated note was written, `git add wiki/meta/paper-ref-candidates.md`.
+
+17. **Entity aliases** (conventions §12 rule 6). Detect entity pages that name the same person or organisation (English vs Japanese title, legal suffix, `J. Dean` vs `Jeff Dean`, `MIT` vs its full name, alias collisions where one page's title sits in another page's `aliases`):
 
     ```bash
     python3 scripts/entity-resolve.py report --limit 30     # paste as ## Entity Aliases
+    python3 scripts/concept-resolve.py report --limit 30    # paste as ## Concept Aliases (immediately after Entity Aliases)
     ```
 
-    Read-only; every row is **Needs review** for a wiki-refactor 統合 pass (`entity-resolve.py plan --keep A --drop B` shows the affected pages). Surname-only and `Y. Li`-style aliases are ignored by the detector. Two different organisations sharing a short acronym are fixed by removing one alias, not by merging. After the human decides, `decide --merged` / `decide --rejected --reason` records it; stage `.vault-meta/entity-merges.json` with `git add -f` once it exists.
+    Read-only; every row is **Needs review** for a wiki-refactor 統合 pass (`entity-resolve.py plan --keep A --drop B` shows the affected pages). Surname-only and `Y. Li`-style aliases are ignored by the detector. Two different organisations sharing a short acronym are fixed by removing one alias, not by merging. After the human decides, `decide --merged` / `decide --rejected --reason` records it; stage `.vault-meta/entity-merges.json` with `git add -f` once it exists. Concept pairs are decided with `concept-resolve.py decide` and staged as `.vault-meta/concept-merges.json` (`git add -f`). They do not go into `entity-merges.json`. Concept pairs come from `concept-resolve.py report` (unfinished merges and page-less alias-only pairs are required; body capped at 30).
 
-17. **Machine state (doctor)**. Run this **first**, before checks 1–16, because a stale retrieval index or a duplicate address distorts the other checks (dead-link hunting against chunks that point at moved pages, tiling over unchunked pages):
+18. **Machine state (doctor)**. It runs before checks 1–17 because a stale retrieval index or a duplicate address distorts the other checks (dead-link hunting against chunks that point at moved pages, tiling over unchunked pages):
 
     ```bash
     python3 scripts/wiki-doctor.py            # OK / WARN / FAIL table with a fix: command per finding; exit 1 on any FAIL
     ```
 
-    Read-only. Apply the printed `fix:` commands yourself only for the derived caches (`wiki-retrieve-refresh.py`, `wiki-graph.py build`, `wiki-clusters.py build`, `paper-ids.py scan --write-index`, `contradiction-index.py build`) and stale locks (`wiki-lock.sh reap`); everything else (duplicate `address:`, manifest gaps, `*.tmp` residue that may belong to a concurrent ingest, corrupt ledgers) is **Needs review**. Paste the table as **## Doctor** at the top of the report.
+    Read-only. Apply the printed `fix:` commands yourself only for the derived caches (`wiki-retrieve-refresh.py`, `wiki-graph.py build`, `wiki-clusters.py build`, `paper-ids.py scan --write-index`, `contradiction-index.py --write`) and stale locks (`wiki-lock.sh reap`); everything else (duplicate `address:`, manifest gaps, `*.tmp` residue that may belong to a concurrent ingest, corrupt ledgers) is **Needs review**. Paste the table as **## Doctor** at the top of the report.
 
 ---
 
@@ -112,9 +111,13 @@ Create at `wiki/meta/lint-report-YYYY-MM-DD.md`:
 ---
 type: meta
 title: "Lint Report YYYY-MM-DD"
+date: YYYY-MM-DD HH:mm
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
-tags: [meta, lint]
+tags:
+  - YYYY/MM/DD
+  - meta
+  - lint
 status: developing
 ---
 
@@ -163,269 +166,76 @@ status: developing
 ## Paper IDs
 (paste `python3 scripts/paper-ids.py report` verbatim; duplicate groups are Needs review, backfill counts are auto-fixed)
 
+## Paper Ref Candidates
+(paste `python3 scripts/paper-refs.py report --write` stdout verbatim; `ready` rows are proposals for the human, not auto-ingest. If the command exits 1, write 「台帳が読めない」 and continue. If it exits 75 after one retry, paste stdout and do not add the generated note)
+
 ## Entity Aliases
 (paste `python3 scripts/entity-resolve.py report` verbatim; every pair is Needs review for wiki-refactor 統合, never auto-merged)
+
+## Concept Aliases
+(paste `python3 scripts/concept-resolve.py report --limit 30` verbatim; unfinished merges and page-less pairs are required)
 ```
 
 ---
 
 ## Naming Conventions
 
-Enforce these during lint:
-
-| Element | Convention | Example |
-|---------|-----------|---------|
-| Filenames | Title Case with spaces | `Machine Learning.md` |
-| Folders | lowercase with dashes | `wiki/data-models/` |
-| Tags | lowercase, hierarchical | `#domain/architecture` |
-| Wikilinks | match filename exactly | `[[Machine Learning]]` |
-
-Filenames must be unique across the vault. Wikilinks work without paths only if filenames are unique.
+命名は `wiki/meta/conventions.md` §4 に従う。ask / brief は source と同じ basename を持つので、ベアリンクではなくパス修飾リンクになっているかを検査する。
 
 ---
 
 ## Writing Style Check
 
-During lint, flag pages that violate the style guide:
-
-- Not declarative present tense ("X basically does Y" instead of "X does Y")
-- Missing source citations where claims are made
-- Uncertainty not flagged with `> [!gap]`
-- Contradictions not flagged with `> [!contradiction]`
+During lint, flag pages that violate `wiki/meta/japanese-style.md` (常体, no code-switching), claims without source citations, uncertainty not flagged with `> [!gap]`, and contradictions not flagged with `> [!contradiction]`.
 
 ---
 
-## Dataview Dashboard
+## Address Validation
 
-Create or update `wiki/meta/dashboard.md` with these queries:
+Every non-meta wiki page carries `address: c-NNNNNN` (wiki/CLAUDE.md rule 7). Check 18 (doctor) already reports counter drift, duplicate addresses, and knowledge pages that have no address at all. This check adds the two things doctor does not look at.
 
-````markdown
----
-type: meta
-title: "Dashboard"
-updated: YYYY-MM-DD
----
-# Wiki Dashboard
+Not applicable: pages under `wiki/folds/` (they use `fold_id`) and the meta files `_index.md`, `index.md`, `log.md`, `hot.md`, `overview.md`, `dashboard.md`, `dashboard.base`.
 
-## Recent Activity
-```dataview
-TABLE type, status, updated FROM "wiki" SORT updated DESC LIMIT 15
-```
+1. **Format**: any `address:` value must match `^c-[0-9]{6}$`. Anything else is an error (doctor skips malformed values instead of flagging them).
+2. **Address-map consistency** (`.raw/.manifest.json`): for every page path in `address_map`, the page must exist and its frontmatter `address` must match the mapping. A mismatch is an error: a rename dropped the map update, or a manual edit diverged.
 
-## Seed Pages (Need Development)
-```dataview
-LIST FROM "wiki" WHERE status = "seed" SORT updated ASC
-```
-
-## Entities Missing Sources
-```dataview
-LIST FROM "wiki/entities" WHERE !sources OR length(sources) = 0
-```
-
-## Open Questions
-```dataview
-LIST FROM "wiki/questions" WHERE answer_quality = "draft" SORT created DESC
-```
-````
-
----
-
-## Canvas Map
-
-Create or update `wiki/meta/overview.canvas` for a visual domain map:
-
-```json
-{
-  "nodes": [
-    {
-      "id": "1",
-      "type": "file",
-      "file": "wiki/overview.md",
-      "x": 0, "y": 0,
-      "width": 300, "height": 140,
-      "color": "1"
-    }
-  ],
-  "edges": []
-}
-```
-
-Add one node per domain page. Connect domains that have significant cross-references. Colors map to the CSS scheme: 1=blue, 2=purple, 3=yellow, 4=orange, 5=green, 6=red.
-
----
-
-## Address Validation (DragonScale Mechanism 2 MVP)
-
-**Opt-in feature.** Address Validation runs only if the vault is using DragonScale, detected by:
-
-```bash
-if [ -x ./scripts/allocate-address.sh ] && [ -f ./.vault-meta/address-counter.txt ]; then
-  DRAGONSCALE_ADDRESSES=1
-else
-  DRAGONSCALE_ADDRESSES=0
-fi
-```
-
-When `DRAGONSCALE_ADDRESSES=0`, skip this entire section. Missing `address:` fields are not flagged, not even informationally. Pages that happen to have an `address:` field are passed through unvalidated (treat as user-managed metadata).
-
-When `DRAGONSCALE_ADDRESSES=1`, proceed with the rollout baseline and checks below.
-
-Rollout baseline: **2026-04-23** (Phase 2 ship date in vaults that adopted DragonScale on that day). Vaults that adopted DragonScale later should override this baseline by setting the earliest `created:` date of any addressed page as their personal rollout date. Record the chosen baseline at the top of `.vault-meta/legacy-pages.txt` as a commented line: `# rollout: YYYY-MM-DD`.
-
-### Classification rule (applied per page)
-
-Before validating anything, classify the page:
-
-| Classification | Criteria |
-|---|---|
-| **Meta / fold / excluded** | File is in `wiki/folds/` OR filename in `{_index.md, index.md, log.md, hot.md, overview.md, dashboard.md, dashboard.base, Wiki Map.md, getting-started.md}`. Address not required. |
-| **Post-rollout (must have address)** | `type` is not meta/fold AND frontmatter `created:` date is >= 2026-04-23 AND file path is NOT in the legacy baseline manifest. |
-| **Legacy (backfill-eligible)** | `type` is not meta/fold AND frontmatter `created:` date is < 2026-04-23 OR file path IS in the legacy baseline manifest. Address not required until backfill. |
-
-**Legacy baseline manifest**: optional file at `.vault-meta/legacy-pages.txt`, one relative path per line. Pages listed there are treated as legacy regardless of `created:` date. Use this to grandfather pages whose `created:` metadata is wrong or missing.
-
-### Validation checks (run in order)
-
-1. **Format check**: any page with `address:` set must match one of:
-   - `^c-[0-9]{6}$` — post-rollout creation address.
-   - `^l-[0-9]{6}$` — legacy-backfill address.
-   - Pages under `wiki/folds/` use `fold_id`, not `address`; do not apply the `c-`/`l-` regex there.
-
-2. **Uniqueness check**: no two pages share the same address value. Report both paths.
-
-3. **Counter consistency**: `./scripts/allocate-address.sh --peek` returns the next counter value. Every observed `c-NNNNNN` must satisfy `NNNNNN < peek_value`. Violation = counter drift.
-
-4. **Post-rollout enforcement**: every page classified as "post-rollout (must have address)" that LACKS the `address:` field is a lint **error**, not informational. This prevents the silent-regression path where a new page skips address assignment.
-
-5. **Legacy identification**: every page classified as "legacy" that LACKS an address is informational. The lint report lists them under "Pending backfill" with total count.
-
-6. **Address-map consistency** (`.raw/.manifest.json`): for every page path in `address_map`, the page must exist and its frontmatter `address` must match the mapping. Mismatches are errors (either a rename dropped the map update, or a manual edit diverged).
-
-### Lint posture summary
-
-- Pages that HAVE an address with bad format: **error**.
-- Pages that HAVE colliding addresses: **error**.
-- Pages classified **post-rollout** WITHOUT an address: **error**.
-- Pages classified **legacy** WITHOUT an address: **informational** (expected).
-- Meta and fold pages without `address`: **ignored** (not applicable).
-- Counter drift (observed counter >= peek): **error**.
-- Address-map mismatch: **error**.
-
-Lint only observes. Do NOT auto-assign missing addresses during lint. Assignment is `wiki-ingest`'s responsibility only.
+Lint only observes. Do not assign or change addresses during lint. Pages without an address are repaired with the command doctor prints (`python3 scripts/address-backfill.py --write`, after the creation path that bypassed `wiki-page-write.py` is closed), and counter drift with `bash scripts/allocate-address.sh --rebuild`; both go under **Needs review**.
 
 ### Output section in the lint report
 
 ```markdown
 ## Address Validation
 
-- Counter state: `$(./scripts/allocate-address.sh --peek)`
-- Highest c- address observed: c-XXXXXX
-- Post-rollout pages checked: N (X passing, Y errors)
-- Legacy pages pending backfill: M
+- Counter, duplicates, pages without address: see ## Doctor
+- Format errors: N
+- Address-map mismatches: N
 
 ### Errors
-- [[Page Name]]: invalid address format `{value}`. Expected `c-NNNNNN` or `l-NNNNNN`.
-- [[Page A]] and [[Page B]] share address `c-000042`.
-- [[Post-Rollout Page]]: missing address. Page created 2026-04-25 (post-rollout); address required. Run wiki-ingest (`wiki-page-write.py` allocates). Do not call `allocate-address.sh` directly.
-- [[Page Name]] has address `c-000100` but counter peek is `50`. Counter drift; run `./scripts/allocate-address.sh --rebuild`.
+- [[Page Name]]: invalid address format `{value}`. Expected `c-NNNNNN`.
 - `.raw/.manifest.json` maps `wiki/foo.md` -> `c-000010` but page frontmatter has `c-000012`. Resolve mismatch.
-
-### Pending backfill (informational)
-- M legacy pages without addresses. See `.vault-meta/legacy-pages.txt` for the canonical legacy set, or filter by `created:` < 2026-04-23.
 ```
 
 ---
 
-## Semantic Tiling (DragonScale Mechanism 3 MVP, opt-in)
+## Semantic Tiling
 
-**Opt-in feature.** Semantic tiling flags candidate duplicate *pages* (not just concept pages — see Scope below) using embedding cosine similarity. Local ollama only by default; remote endpoints require an explicit override flag.
-
-### Detection and delegation
+`scripts/tiling-check.py` flags candidate duplicate pages by embedding cosine similarity (local ollama, `nomic-embed-text`). It is read-only: duplicates are listed, never merged. The helper hard-fails above 5,000 scanned pages and needs a running ollama, so on this vault it normally cannot complete. Probe once and report the outcome as it is; do not work around a non-zero exit.
 
 ```bash
-if [ -x ./scripts/tiling-check.py ] && command -v python3 >/dev/null 2>&1; then
-  ./scripts/tiling-check.py --peek > /tmp/tiling-peek.json 2>/dev/null
-  PEEK_EXIT=$?
-  case $PEEK_EXIT in
-    0)  TILING_READY=1 ;;                                  # ready
-    2)  TILING_READY=0 ; echo "tiling ERROR: usage error (exit 2); inspect /tmp/tiling-peek.json" ;;
-    3)  TILING_READY=0 ; echo "tiling ERROR: cache corrupt (exit 3); inspect .vault-meta/tiling-cache.json" ;;
-    4)  TILING_READY=0 ; echo "tiling ERROR: vault exceeds scale hard-fail (exit 4); batching required" ;;
-    10) TILING_READY=0 ; echo "tiling skipped: ollama not reachable (exit 10)" ;;
-    11) TILING_READY=0 ; echo "tiling skipped: run 'ollama pull nomic-embed-text' to enable (exit 11)" ;;
-    *)  TILING_READY=0 ; echo "tiling ERROR: unexpected exit code $PEEK_EXIT from tiling-check.py --peek" ;;
-  esac
-else
-  TILING_READY=0
-  echo "tiling skipped: scripts/tiling-check.py or python3 not available"
-fi
+./scripts/tiling-check.py --peek > "$TMPDIR/tiling-peek.json" 2>/dev/null; echo "exit=$?"
 ```
 
-Inspect `/tmp/tiling-peek.json` (structured diagnostics: script path, python interpreter, ollama URL, cache state, thresholds state) whenever the status is ambiguous. Never collapse unknown exits into "unknown status" silently.
-
-When `TILING_READY=1`:
-
-```bash
-./scripts/tiling-check.py --report wiki/meta/tiling-report-YYYY-MM-DD.md
-REPORT_EXIT=$?
-case $REPORT_EXIT in
-  0)  echo "tiling report written" ;;
-  2)  echo "tiling ERROR: usage error during --report" ;;
-  3)  echo "tiling ERROR: cache corrupt during --report" ;;
-  4)  echo "tiling ERROR: scale hard-fail during --report" ;;
-  10) echo "tiling ERROR: ollama became unreachable between --peek and --report" ;;
-  11) echo "tiling ERROR: model became unavailable between --peek and --report" ;;
-  *)  echo "tiling ERROR: unexpected exit code $REPORT_EXIT from tiling-check.py --report" ;;
-esac
-```
-
-### Scope (what the helper scans)
-
-- Includes: every `.md` under `wiki/` **except** the exclusion set below. The scope is "candidate tileable pages," not just `type: concept`.
-- Excludes (path): anything under `wiki/folds/`, `wiki/meta/`, `wiki/asks/`, or `wiki/briefs/`.
-- Excludes (filename): `_index.md`, `index.md`, `log.md`, `hot.md`, `overview.md`, `dashboard.md`, `Wiki Map.md`, `getting-started.md`.
-- Excludes (frontmatter): `type: meta`, `type: fold`, `type: ask`, or `type: brief`.
-- Excludes (security): symlinks. Any page file that is a symlink, or whose resolved path escapes the vault root, is skipped.
-
-If you place a real concept under `wiki/meta/` it will be excluded by path regardless of content. Keep concepts in their canonical folders.
-
-### How the helper works
-
-- Computes one embedding per included page via the ollama `nomic-embed-text` model by default.
-- Caches embeddings at `.vault-meta/tiling-cache.json`, keyed on `sha256(model + body)` so model drift auto-invalidates. Frontmatter is not part of the hash or the embedding input — pure frontmatter edits (tag changes, status bumps) do not trigger recomputation.
-- Orphans are GC'd: when a cached page path no longer exists on disk, its entry is dropped on save.
-- Concurrent-safe: exclusive flock on `.vault-meta/.tiling.lock` around cache I/O; per-PID temp file for atomic writes.
-
-### Security posture
-
-- Defaults to `http://127.0.0.1:11434`. `OLLAMA_URL` env override is accepted **only** with `--allow-remote-ollama` because page bodies are POSTed as embedding input.
-- Symlinks and vault-root escapes are rejected.
-
-### Default bands (conservative seeds, NOT calibrated)
-
-| Band | Similarity | Report section |
+| Exit | Meaning | What goes under `## Semantic Tiling` in the report |
 |---|---|---|
-| Error | `>= 0.90` | **Errors** — strong near-duplicate, likely the same concept |
-| Review | `0.80 - 0.90` | **Review** — possible tile overlap; human judgement needed |
-| Pass | `< 0.80` | not emitted |
+| 0 | ready | run `./scripts/tiling-check.py --report wiki/meta/tiling-report-YYYY-MM-DD.md`, then embed the counts below |
+| 4 | more pages than the hard limit | `skipped: scale hard-fail (exit 4)` |
+| 10 | ollama unreachable | `skipped: ollama not reachable (exit 10)` |
+| 11 | embedding model missing | `skipped: model missing (exit 11)` |
+| 2, 3, other | usage error, corrupt cache (`.vault-meta/tiling-cache.json`), unexpected | report the exit code as an error; `$TMPDIR/tiling-peek.json` holds the diagnostics |
 
-**These values are conservative seeds, not literature-backed interpolation.** Published reference points: Sentence Transformers `community_detection` defaults to 0.75; Quora-duplicate calibrations land around 0.7715-0.8352 depending on objective. The 0.80 review floor is already stricter than at least one cited Quora optimum, so expect **false negatives** against those baselines. Reduce the review floor during calibration if you want more sensitivity.
+Report each exit code as it is rather than folding them into "unknown". `--report` can return the same codes if ollama goes away between the two calls. The helper posts page bodies as embedding input, so it only talks to `127.0.0.1` unless `--allow-remote-ollama` is given; pass that flag only when the user asks.
 
-### Calibration procedure (manual, one-time per vault)
-
-1. Run the helper with defaults. Capture the **Review** band pairs.
-2. Temporarily lower `bands.review` to `0.70` in `.vault-meta/tiling-thresholds.json` to surface a wider sample. Aim for >=50 pairs spanning 0.70-0.95.
-3. Label each pair: `duplicate`, `similar`, `distinct`.
-4. Pick bands such that: (a) the `error` band contains >= 95% true duplicates; (b) the `review` band captures `similar` pairs without swamping the report with `distinct` ones.
-5. Edit `.vault-meta/tiling-thresholds.json`: set new `bands.error` and `bands.review`, set `calibrated: true`, set `calibration_pairs_labeled` to the label count.
-6. Re-run lint. Report footer now says `calibrated: true`.
-
-### Scale
-
-- Cold-cache cost is O(N) POSTs to ollama. Warm-cache cost is O(N^2) cosines in pure Python.
-- Helper prints a warning at > 500 pages and hard-fails (exit 4) at > 5000. Revisit the implementation (batching, vectorized cosine, or external tooling) before exceeding either limit.
-
-### Lint report embed
+When a report was written:
 
 ```markdown
 ## Semantic Tiling
@@ -435,12 +245,7 @@ See [[tiling-report-YYYY-MM-DD]] for the full pair listing.
 - Calibrated: true|false
 ```
 
-### Invariants
-
-- Read-only. `tiling-check.py` never modifies wiki pages.
-- No auto-merge. Duplicates are listed, never resolved.
-- Cache is incremental and model-scoped. Unchanged pages are not re-embedded.
-- Exit codes: `0` ok, `2` usage error, `3` cache corrupt, `4` scale hard-fail, `10` ollama unreachable, `11` model missing. Surface all of them; do not collapse into a single "unknown" bucket.
+The bands and the `calibrated` flag come from `.vault-meta/tiling-thresholds.json` (defaults: error at 0.90 and above, review from 0.80, uncalibrated). Pages under `wiki/folds/`, `wiki/meta/`, `wiki/asks/` and `wiki/briefs/` are not scanned.
 
 ---
 
@@ -448,31 +253,12 @@ See [[tiling-report-YYYY-MM-DD]] for the full pair listing.
 
 Always show the lint report first. Ask: "Should I fix these automatically, or do you want to review each one?"
 
-Safe to auto-fix:
+Safe to fix once the user agrees to automatic fixes:
 - Adding missing frontmatter fields with placeholder values
-- Creating stub pages for missing entities
 - Adding wikilinks for unlinked mentions
 
 Needs review before fixing:
+- Creating pages for missing entities or concepts. New pages go through `wiki-page-write.py` (address, validation), and whether a page should exist is an ingest / refactor decision
 - Deleting orphan pages (they might be intentionally isolated)
 - Resolving contradictions (requires human judgment)
 - Merging duplicate pages
-
----
-
-## How to think (10-principle mapping)
-
-When working on this skill, apply the 10-principle loop. See [`skills/think/SKILL.md`](../think/SKILL.md) for the canonical framework.
-
-| # | Principle | Application here |
-|---|-----------|-------------------|
-| 1 | OBSERVE (ext) | Scan content pages, wikilinks, and frontmatter. No skipping for size. Do not Read catalog files (`wiki/index.md`, `_index.md`, `log.md`, historical `hot.md`). |
-| 2 | OBSERVE (int) | Am I biased toward "looks fine"? Pretend you're a hostile reader looking for what's actually wrong. |
-| 3 | LISTEN | Did the user mention specific concerns this session? Prioritize those over generic checks. |
-| 4 | THINK | Which checks matter? Tier findings by severity (BLOCKER / HIGH / MEDIUM / LOW), not by ease of fix. |
-| 5 | CONNECT (lat) | Orphan + dead-link + frontmatter-gap patterns often co-occur. Cluster findings to expose root causes. |
-| 6 | CONNECT (sys) | Tiling-check + Dataview dashboards + canvas overview — multiple lint surfaces to integrate. |
-| 7 | FEEL | A lint report should empower, not shame. Actionable items beat exhaustive catalog. |
-| 8 | ACCEPT | Some lint findings are deliberate (orphan-by-design, intentional stub). Flag, don't force. |
-| 9 | CREATE | Lint report at `wiki/meta/lint-report-YYYY-MM-DD.md` with tiered findings. |
-| 10 | GROW | Recurring lint findings → process improvement targets, not just one-time fixes. |

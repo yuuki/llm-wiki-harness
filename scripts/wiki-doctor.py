@@ -16,15 +16,16 @@ hot 窓の超過、一時ファイルの残骸。本スクリプトはそれら�
   retrieve_provisioned  BM25 索引と chunks がある
   bm25_schema           索引の分かちが現行(和文 2-gram)か
   bm25_freshness        索引の updated_at より新しい wiki ページの数
-  stale_chunks          page_path が存在しない chunk(ページの移動・削除の残骸)
+  stale_chunks          page_path が存在しない chunk(移動・削除の残骸)と知識ページ以外の chunk
   unchunked_pages       chunk が無い wiki ページ(新規・未 refresh)
   derived_caches        graph.json / paper-ids.json / contradictions.json / clusters.json の鮮度
   locks                 .vault-meta/locks の残留(1 時間超は放置ロック)
-  address_counter       address-counter.txt と最大 address、重複 address
+  address_counter       address-counter.txt と最大 address、重複 address、address の無い知識ページ
   manifest              .raw/.manifest.json の原本欠落と未登録原本
   ledgers               台帳 JSON の構文と追跡状態
   hot_window            hot.md が 5 エントリ / 2,000 トークン以内
   log_head              log.md の先頭がエントリ見出し
+  log_rotation          log.md に先頭エントリより前の月が残っていない(過去月は wiki/log/YYYY-MM.md)
   tmp_residue           wiki/ 配下の *.tmp
   auto_commit_disabled  plugin の自動コミットが無効化されている
   ollama                rerank 用 ollama(127.0.0.1:11434)への到達(INFO)
@@ -48,7 +49,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
-from wiki_tokenize import INDEX_SCHEMA_VERSION, TOKENIZE_ID
+from wiki_cjk import INDEX_SCHEMA_VERSION, TOKENIZE_ID
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 META = VAULT_ROOT / ".vault-meta"
@@ -57,9 +58,11 @@ CLUSTER_DIRS = ("sources", "entities", "concepts", "questions")
 COMPANION_DIRS = ("asks", "briefs")
 WIKI_DIRS = KNOWLEDGE_DIRS
 ADDRESS_RE = re.compile(r"^address:\s*\"?(c-\d{6})\"?\s*$", re.M)
+ANY_ADDRESS_RE = re.compile(r"^address:", re.M)
 HOT_MAX_ENTRIES, HOT_MAX_TOKENS = 5, 2000
 LOCK_STALE_SEC = 3600
-TRACKED_LEDGERS = ("recompile-queue.json", "claim-audit.json", "concept-candidates.json")
+TRACKED_LEDGERS = ("recompile-queue.json", "claim-audit.json", "concept-candidates.json",
+                   "paper-ref-candidates.json")
 OPTIONAL_LEDGERS = ("entity-merges.json", "mode.json", "transport.json")
 
 
@@ -125,7 +128,7 @@ def check_retrieve_provisioned(r, ctx):
         ctx["provisioned"] = True
     else:
         r.warn("retrieve_provisioned", "BM25 索引か chunks が無い(retrieve.py は終了 10 を返す)",
-               "bash bin/setup-retrieve.sh && python3 scripts/wiki-retrieve-refresh.py")
+               "bash bin/setup-retrieve.sh && python3 scripts/wiki-retrieve-refresh.py --all")
         ctx["provisioned"] = False
 
 
@@ -167,16 +170,22 @@ def check_bm25_freshness(r, ctx):
     age_h = (time.time() - updated) / 3600
     if newer:
         r.warn("bm25_freshness", f"索引より新しいページ {len(newer)} 頁(索引は {age_h:.1f} 時間前。mtime 基準なので frontmatter だけの変更も数える)",
-               "python3 scripts/wiki-retrieve-refresh.py")
+               "python3 scripts/wiki-retrieve-refresh.py --all(変更頁だけ再チャンクする)")
     else:
         r.ok("bm25_freshness", f"索引は最新({age_h:.1f} 時間前)")
+
+
+def is_knowledge_rel(rel_path):
+    parts = Path(rel_path).parts
+    return (len(parts) == 3 and parts[0] == "wiki" and parts[1] in KNOWLEDGE_DIRS
+            and not parts[2].startswith("_"))
 
 
 def check_stale_chunks(r, ctx):
     chunks = META / "chunks"
     if not chunks.is_dir():
         return
-    stale, paths = [], set()
+    stale, foreign, paths = [], [], set()
     for d in chunks.iterdir():
         c0 = d / "chunk-000.json"
         if not c0.is_file():
@@ -192,11 +201,14 @@ def check_stale_chunks(r, ctx):
         paths.add(pp)
         if not (VAULT_ROOT / pp).is_file():
             stale.append(pp)
+        elif not is_knowledge_rel(pp):
+            foreign.append(pp)
     ctx["chunk_paths"] = paths
-    if stale:
-        sample = "、".join(Path(s).name for s in stale[:3])
-        r.warn("stale_chunks", f"存在しないページを指す chunk {len(stale)} 件(例: {sample})。retrieve が古いパスを返す",
-               "python3 scripts/wiki-retrieve-refresh.py(全再構築。約 3 分)")
+    if stale or foreign:
+        sample = "、".join(Path(s).name for s in (stale + foreign)[:3])
+        r.warn("stale_chunks", f"存在しないページを指す chunk {len(stale)} 件、知識ページ以外(カタログ・meta 等)の chunk "
+               f"{len(foreign)} 件(例: {sample})。retrieve に混ざる",
+               "python3 scripts/wiki-retrieve-refresh.py --all(--prune で消す)")
     else:
         r.ok("stale_chunks", f"chunk {len(paths)} 頁分すべて実在ページを指す")
 
@@ -208,7 +220,7 @@ def check_unchunked_pages(r, ctx):
     missing = [p for p in ctx["pages"] if rel(p) not in paths]
     if missing:
         r.warn("unchunked_pages", f"chunk が無いページ {len(missing)} 頁(例: {Path(missing[0]).name})",
-               "python3 scripts/wiki-retrieve-refresh.py")
+               "python3 scripts/wiki-retrieve-refresh.py --all(変更頁だけ再チャンクする)")
     else:
         r.ok("unchunked_pages", "全ページに chunk がある")
 
@@ -218,7 +230,7 @@ def check_derived_caches(r, ctx):
     specs = (
         ("graph.json", "python3 scripts/wiki-graph.py build", ctx["pages"]),
         ("paper-ids.json", "python3 scripts/paper-ids.py scan --write-index", ctx["pages"]),
-        ("contradictions.json", "python3 scripts/contradiction-index.py build", ctx["pages"]),
+        ("contradictions.json", "python3 scripts/contradiction-index.py --write", ctx["pages"]),
         ("clusters.json", "python3 scripts/wiki-clusters.py build", ctx["cluster_pages"]),
     )
     for name, fix, pages in specs:
@@ -283,6 +295,8 @@ def pid_alive(pid):
 def check_address_counter(r, ctx):
     counter_file = META / "address-counter.txt"
     addrs = Counter()
+    knowledge = set(ctx["pages"])
+    missing = []
     for p in ctx.get("address_pages") or ctx["pages"]:
         try:
             head = p.read_text(encoding="utf-8")[:1500]
@@ -291,6 +305,10 @@ def check_address_counter(r, ctx):
         m = ADDRESS_RE.search(head)
         if m:
             addrs[m.group(1)] += 1
+        elif p in knowledge and not ANY_ADDRESS_RE.search(head) \
+                and not re.search(r"^type:\s*(meta|fold)\s*$", head, re.M):
+            # wiki-page-write.py を通らずに作られたページ(lint の post-rollout 欠落)
+            missing.append(p)
     dupes = [a for a, n in addrs.items() if n > 1]
     max_used = max((int(a[2:]) for a in addrs), default=0)
     try:
@@ -306,6 +324,10 @@ def check_address_counter(r, ctx):
     elif counter < max_used:
         r.fail("address_counter", f"計数器 {counter} が最大使用 {max_used} より小さい(次の採番が衝突する)",
                "bash scripts/allocate-address.sh --rebuild")
+    elif missing:
+        r.warn("address_counter", f"address の無い知識ページ {len(missing)} 頁(例: {missing[0].name})。"
+               "wiki-page-write.py を通らない作成経路がある",
+               "python3 scripts/address-backfill.py --write(経路を塞いでから)")
     else:
         r.ok("address_counter", f"計数器 {counter}、最大使用 c-{max_used:06d}、address 付きページ {sum(addrs.values())} 頁、重複無し")
 
@@ -320,7 +342,11 @@ def check_manifest(r, ctx):
     except (OSError, json.JSONDecodeError) as exc:
         r.fail("manifest", f".manifest.json を読めない: {exc}")
         return
-    entries = [k for k in m if k.startswith(".raw/")]
+    # 正の形は最上位の `.raw/...` キー。`sources` で包んだ旧形式のエントリも登録済みとして数え、
+    # 残っていれば正規化を促す(数えないと、その原本がすべて「未登録」に見える)。
+    nested_src = m.get("sources") if isinstance(m.get("sources"), dict) else {}
+    nested = [k for k in nested_src if k.startswith(".raw/") and k not in m]
+    entries = [k for k in m if k.startswith(".raw/")] + nested
     missing = [k for k in entries if not (VAULT_ROOT / k).exists()]
     registered = set(entries)
     unregistered = 0
@@ -336,21 +362,29 @@ def check_manifest(r, ctx):
                 unregistered += 1
     detail = (f"登録 {len(entries)} 件、原本欠落 {len(missing)} 件、未登録原本 {unregistered} 件"
               "(manifest 導入前の取り込み。wiki-ingest-* が次に触れたとき登録される)")
+    fixes = []
     if missing:
-        r.warn("manifest", detail + f"(欠落例: {missing[0]})",
-               ".raw/ の原本は不変。欠落は git log -- <path> で経緯を確かめ、復元するか manifest の項目を人が消す")
+        detail += f"(欠落例: {missing[0]})"
+        fixes.append(".raw/ の原本は不変。欠落は git log -- <path> で経緯を確かめ、復元するか manifest の項目を人が消す")
+    if nested:
+        detail += f"。`sources` 配下の旧形式 {len(nested)} 件"
+        fixes.append("python3 scripts/wiki-manifest.py normalize --write(他セッションが取り込み中でないとき)")
+    if fixes:
+        r.warn("manifest", detail, " / ".join(fixes))
     else:
         r.ok("manifest", detail)
 
 
 def check_ledgers(r, ctx):
-    bad, notes = [], []
+    bad, notes, fixes = [], [], []
     tracked = git_tracked_meta()
     for name in TRACKED_LEDGERS + OPTIONAL_LEDGERS:
         f = META / name
         if not f.is_file():
             if name in TRACKED_LEDGERS:
                 notes.append(f"{name} 無し")
+                if name == "paper-ref-candidates.json":
+                    fixes.append("python3 scripts/paper-refs.py backfill")
             continue
         try:
             json.loads(f.read_text(encoding="utf-8"))
@@ -362,7 +396,7 @@ def check_ledgers(r, ctx):
     if bad:
         r.fail("ledgers", "JSON が壊れている: " + "、".join(bad), "git checkout -- .vault-meta/<name> で戻す")
     elif notes:
-        r.warn("ledgers", "、".join(notes))
+        r.warn("ledgers", "、".join(notes), " ; ".join(fixes) if fixes else None)
     else:
         r.ok("ledgers", "台帳 JSON はすべて読める")
 
@@ -402,6 +436,27 @@ def check_log_head(r, ctx):
         r.ok("log_head", f"先頭エントリ: {first[:60]}")
     else:
         r.warn("log_head", f"先頭がエントリ見出しでない: {first[:60]!r}(prepend-log 以外で編集された可能性)")
+
+
+def check_log_rotation(r, ctx):
+    log = VAULT_ROOT / "wiki" / "log.md"
+    if not log.is_file():
+        return
+    months = []
+    with log.open(encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r"^## \[?(\d{4}-\d{2})-\d{2}", line)
+            if m:
+                months.append(m.group(1))
+    if not months:
+        r.ok("log_rotation", "エントリ無し")
+        return
+    stale = sum(1 for m in months if m < months[0])
+    if stale:
+        r.warn("log_rotation", f"log.md に {months[0]} より前の月のエントリが {stale} 件残っている",
+               f"python3 scripts/wiki-catalog.py rotate-log --month {months[0]}")
+    else:
+        r.ok("log_rotation", f"{len(months)} エントリ、すべて {months[0]}")
 
 
 def check_tmp_residue(r, ctx):
@@ -453,6 +508,7 @@ CHECKS = [
     ("ledgers", check_ledgers),
     ("hot_window", check_hot_window),
     ("log_head", check_log_head),
+    ("log_rotation", check_log_rotation),
     ("tmp_residue", check_tmp_residue),
     ("auto_commit_disabled", check_auto_commit_disabled),
     ("ollama", check_ollama),

@@ -1,12 +1,12 @@
 # 書誌照会(識別子優先)
 
-`wiki-gap` / `wiki-ideate` が共有する外側照合の手順。Semantic Scholar Graph API は使わない。キーも 1Password も要らない。
+`wiki-gap` / `wiki-ideate` が共有する外側照合の手順。API キーの要らない経路だけを使う。
 
 ## 規律
 
 - 外部へ出してよいのは**題名と識別子だけ**。ノート本文、vault のパス、`z99_private/` の内容は送らない。
 - 検索語は concept 名と論文題名だけ。文や着想の説明をクエリにしない。
-- 通信はサンドボックス外(escalated)で行う。ホストが遮断されたら回避せず、権限の確認を出す。
+- 外部への通信にはネットワーク権限が要る。ホストが遮断されたら回避せず、権限の確認を出す。
 - `timeout` コマンドは macOS に無いので使わない。
 - 識別子が取れなければ捏造しない。未検証のまま残すか、`metadata_failed` にする。
 - 被引用数は正典性の根拠にしない。会場と、サーベイかどうかで判断する。
@@ -18,10 +18,10 @@
 | arXiv ID(`YYMM.NNNNN` または `arxiv.org/abs/` / `pdf/`) | arXiv API | DBLP で会場を足す | 題・年・要旨・DOI |
 | DOI | Crossref | プレプリント ID があれば arXiv | 題・年・会場。要旨はしばしば空 |
 | 計算機科学の題名だけ | arXiv 題名検索 | DBLP は JSON が返ったときだけ会場を足す | 要旨は arXiv。会場は DBLP か会議名 |
-| Semantic Scholar メールの URL | メール本文の題名と、リンク先の arXiv / DOI | 上のいずれかに落とす | Graph で paperId を引き直さない |
-| 会議の採択リスト | 会議名を会場として採用 | 題名で DBLP / arXiv | `publicationTypes` を API に聞かない |
+| Semantic Scholar メールの URL | メール本文の題名と、リンク先の arXiv / DOI | 上のいずれかに落とす | 落とした先の経路と同じ |
+| 会議の採択リスト | 会議名を会場として採用 | 題名で DBLP / arXiv | 会場は採択リストから。題・識別子は DBLP / arXiv |
 
-OpenAlex は使わない。2026 年から鍵必須・検索は従量であり、短い移行の逃げ道にならない。
+OpenAlex は使わない(鍵が必須で、検索は従量課金である)。
 
 ## パーセントエンコード
 

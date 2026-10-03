@@ -4,6 +4,10 @@
 Subcommands write UTF-8 via tmp+replace and print JSON
 {"ok":true,"path":"...","action":"..."} on success.
 
+`prepend-log` rotates wiki/log.md monthly: entries from months older than
+the prepended entry move to wiki/log/YYYY-MM.md (newest first, `type: meta`).
+`rotate-log` runs the same rotation on demand.
+
 Exit codes:
   0 — success
   2 — usage error
@@ -16,6 +20,7 @@ import os
 import re
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
@@ -28,6 +33,13 @@ VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_MISSING = 3
+
+LOG_ARCHIVE_DIR = "wiki/log"
+# Headings vary (`## [2026-09-07] op | t`, `## 2026-09-07 | op | t`), so take the
+# first date after `## ` with or without brackets.
+LOG_DATE_RE = re.compile(r"^## \[?(\d{4}-\d{2})-\d{2}")
+LOG_DAY_RE = re.compile(r"^## \[?(\d{4}-\d{2}-\d{2})")
+MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:\|[^\]]*)?\]\]")
 
@@ -265,6 +277,67 @@ def with_lock(path, fn):
         return fn()
 
 
+def entry_month(entry):
+    match = LOG_DATE_RE.match(entry)
+    return match.group(1) if match else None
+
+
+def split_log_for_rotation(text, current_month):
+    """(kept log text, {month: [entries]}) — entries before current_month move out.
+
+    Entries without a parseable date stay in the log so nothing is lost.
+    """
+    preamble, entries = split_hash_entries(text)
+    kept = []
+    moved = {}
+    for entry in entries:
+        month = entry_month(entry)
+        if month is not None and month < current_month:
+            moved.setdefault(month, []).append(ensure_nl(entry))
+        else:
+            kept.append(entry)
+    return preamble + "".join(kept), moved
+
+
+def archive_header(month):
+    return (f"---\ntitle: \"wiki 操作ログ {month}\"\ntype: meta\n---\n\n"
+            f"# wiki 操作ログ {month}\n\n")
+
+
+def merge_archive(existing, month, new_entries):
+    """Merge into an archive, newest first. Entries already in the archive are
+    skipped so a rotation interrupted after the archive write can simply be
+    rerun; duplicates inside the log itself move as they are."""
+    preamble, old_entries = split_hash_entries(existing) if existing else ("", [])
+    if not preamble.strip():
+        preamble = archive_header(month)
+    old_entries = [ensure_nl(e) for e in old_entries]
+    archived = {e.strip() for e in old_entries}
+    merged = [e for e in new_entries if e.strip() not in archived] + old_entries
+    # Stable sort: same-day entries keep their log order (newest first).
+    merged.sort(key=lambda e: (LOG_DAY_RE.match(e) or [None, ""])[1], reverse=True)
+    return preamble + "".join(merged)
+
+
+def rotate_log_locked(path, current_month):
+    """Move older-month entries out of the log. Caller holds the log lock."""
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    kept, moved = split_log_for_rotation(existing, current_month)
+    if not moved:
+        return {}
+    archive_dir = VAULT_ROOT / LOG_ARCHIVE_DIR
+    # Archives first: a crash before the log rewrite leaves duplicates that the
+    # next rotation drops, never lost entries.
+    for month, entries in sorted(moved.items()):
+        archive = archive_dir / f"{month}.md"
+        old = archive.read_text(encoding="utf-8") if archive.is_file() else ""
+        atomic_write(archive, merge_archive(old, month, entries))
+    atomic_write(path, kept)
+    counts = {month: len(entries) for month, entries in sorted(moved.items())}
+    log(f"catalog rotate-log: {rel_posix(path)} -> {LOG_ARCHIVE_DIR}/ {counts}")
+    return counts
+
+
 def cmd_prepend_log(path, text):
     def _write():
         existing = require_file(path, create_empty=True)
@@ -272,7 +345,25 @@ def cmd_prepend_log(path, text):
             return EXIT_MISSING
         atomic_write(path, ensure_nl(text) + existing)
         log(f"catalog prepend-log: {rel_posix(path)}")
+        # The new entry's month defines "this month", so rotation never depends
+        # on the clock and an undated entry simply skips it.
+        month = entry_month(text.lstrip())
+        if month is not None:
+            rotate_log_locked(path, month)
         return ok(path, "prepend-log")
+
+    return with_lock(path, _write)
+
+
+def cmd_rotate_log(path, month):
+    def _write():
+        if not path.is_file():
+            log(f"ERR: missing file: {path}")
+            return EXIT_MISSING
+        counts = rotate_log_locked(path, month)
+        print(json.dumps({"ok": True, "path": rel_posix(path), "action": "rotate-log",
+                          "moved": counts}, ensure_ascii=False))
+        return EXIT_OK
 
     return with_lock(path, _write)
 
@@ -364,6 +455,11 @@ def main(argv=None):
     add_file_arg(p, default="wiki/log.md")
     add_text_arg(p)
 
+    p = sub.add_parser("rotate-log")
+    add_file_arg(p, default="wiki/log.md")
+    p.add_argument("--month", default=date.today().strftime("%Y-%m"),
+                   help="YYYY-MM; entries from earlier months move to wiki/log/ (default: this month)")
+
     p = sub.add_parser("prepend-hot")
     add_file_arg(p, default="wiki/hot.md")
     add_text_arg(p)
@@ -398,6 +494,11 @@ def main(argv=None):
 
     if args.cmd == "prepend-log":
         return cmd_prepend_log(path, args.text)
+    if args.cmd == "rotate-log":
+        if not MONTH_RE.match(args.month):
+            log("ERR: --month は YYYY-MM 形式である")
+            return EXIT_USAGE
+        return cmd_rotate_log(path, args.month)
     if args.cmd == "prepend-hot":
         return cmd_prepend_hot(path, args.text, args.budget_tokens, args.max_entries)
     if args.cmd == "trim-hot":

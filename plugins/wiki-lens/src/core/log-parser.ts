@@ -1,4 +1,4 @@
-import { App } from "obsidian";
+import { App, TFile } from "obsidian";
 import { GraphIndex } from "./graph-index";
 import { LogEvent, LogParseResult } from "./types";
 
@@ -16,12 +16,15 @@ import { LogEvent, LogParseResult } from "./types";
  */
 
 const LOG_PATH = "wiki/log.md";
+/** Monthly archives `wiki/log/YYYY-MM.md`, rotated out of log.md by scripts/wiki-catalog.py */
+const ARCHIVE_DIR = "wiki/log/";
+const ARCHIVE_NAME_RE = /^\d{4}-\d{2}\.md$/;
 
 /** `## [YYYY-MM-DD] <op> | <title>` heading. Tolerant of surrounding whitespace and mixed full-width brackets */
 const HEADING_RE = /^##\s*\[(\d{4}-\d{2}-\d{2})\]\s*([^|]+?)\s*\|\s*(.+)$/;
 
 /**
- * Best-effort parse of wiki/log.md. Never throws on failure
+ * Best-effort parse of wiki/log.md and its monthly archives. Never throws on failure
  * (if everything fails, returns events: [] and the timeline feature degrades
  * gracefully to frontmatter only).
  */
@@ -33,44 +36,62 @@ export async function parseWikiLog(
 	let failedCount = 0;
 
 	try {
-		const file = app.vault.getFileByPath(LOG_PATH);
-		if (!file) return { events, failedCount };
+		// log.md holds the current month; archives go newest month first so
+		// events stay in listed order (newest first) across files
+		const files: TFile[] = [];
+		const current = app.vault.getFileByPath(LOG_PATH);
+		if (current) files.push(current);
+		const archives = app.vault
+			.getMarkdownFiles()
+			.filter((f) => f.path.startsWith(ARCHIVE_DIR) && ARCHIVE_NAME_RE.test(f.name))
+			.sort((a, b) => b.name.localeCompare(a.name));
+		files.push(...archives);
 
-		const content = await app.vault.cachedRead(file);
-		const lines = content.split("\n");
-
-		let i = 0;
-		while (i < lines.length) {
-			const headingMatch = HEADING_RE.exec(lines[i]);
-			if (!headingMatch) {
-				i++;
-				continue;
-			}
-
-			// Everything up to the next "## " heading is this entry's range
-			let j = i + 1;
-			const bodyLines: string[] = [];
-			while (j < lines.length && !lines[j].trimStart().startsWith("## ")) {
-				bodyLines.push(lines[j]);
-				j++;
-			}
-
-			try {
-				const event = parseEntry(headingMatch, bodyLines, index);
-				if (event) events.push(event);
-				else failedCount++;
-			} catch {
-				// Isolate individual entry parse failures and keep parsing other entries
-				failedCount++;
-			}
-
-			i = j;
+		for (const file of files) {
+			const content = await app.vault.cachedRead(file);
+			failedCount += parseContent(content, events, index);
 		}
 	} catch (err) {
 		console.warn("wiki-lens: failed to parse wiki/log.md (continuing without annotations)", err);
 	}
 
 	return { events, failedCount };
+}
+
+/** Parse one log file's entries into `events`; returns the number of skipped entries */
+function parseContent(content: string, events: LogEvent[], index: GraphIndex): number {
+	let failedCount = 0;
+	const lines = content.split("\n");
+
+	let i = 0;
+	while (i < lines.length) {
+		const headingMatch = HEADING_RE.exec(lines[i]);
+		if (!headingMatch) {
+			i++;
+			continue;
+		}
+
+		// Everything up to the next "## " heading is this entry's range
+		let j = i + 1;
+		const bodyLines: string[] = [];
+		while (j < lines.length && !lines[j].trimStart().startsWith("## ")) {
+			bodyLines.push(lines[j]);
+			j++;
+		}
+
+		try {
+			const event = parseEntry(headingMatch, bodyLines, index);
+			if (event) events.push(event);
+			else failedCount++;
+		} catch {
+			// Isolate individual entry parse failures and keep parsing other entries
+			failedCount++;
+		}
+
+		i = j;
+	}
+
+	return failedCount;
 }
 
 /** Build a LogEvent from one heading + its body lines. Returns null if date is invalid */

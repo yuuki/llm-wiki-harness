@@ -10,7 +10,7 @@
 <scratch>/extracts/ch-NN.md
 ```
 
-例: `/tmp/book-<slug>/extracts/ch-03.md`、`/tmp/thesis-<slug>/extracts/ch-03.md`、またはユーザー作業ディレクトリ配下。
+例: `$TMPDIR/book-<slug>/extracts/ch-03.md`、`$TMPDIR/thesis-<slug>/extracts/ch-03.md`、またはユーザー作業ディレクトリ配下。`/tmp` 直下はサンドボックスで書き込みを拒否されることがある。
 
 必須見出しは次のとおり。欠落は `scripts/wiki-extract-check.py` が見つける。見出し文言は一字一句この形にする。
 

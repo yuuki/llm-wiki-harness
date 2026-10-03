@@ -27,8 +27,11 @@ Section aliases: the concept inbox is `未編纂の観察`; its legacy name
 
 --outline prints the page shape only: every ## heading, ### headings and
 the bold claim line of each top-level bullet inside topic sections
-(all ## that are not one of the fixed concept sections), plus bullet
-counts for the fixed sections. No body text.
+(all ## that are not functional sections), plus bullet counts for the
+functional sections. Functional = the fixed concept sections, their
+bracketed variants (横断的知見(続き)) and reference lists (参照, 関連ページ);
+see wiki_sections.py. The inbox count skips the empty-inbox placeholder line.
+No body text.
 
 Exit codes:
   0 — success
@@ -42,6 +45,12 @@ import os
 import re
 import sys
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from wiki_sections import KIND_DEFINITION, KIND_INBOX, KIND_TOPIC, is_legacy_inbox_heading, \
+    is_placeholder_bullet, section_kind  # noqa: E402
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 
@@ -62,7 +71,8 @@ SECTION_ALIASES = {
 }
 CONCEPT_SECTIONS = ("定義", "子概念", "未解決の問い", INBOX_SECTION)
 TAIL_MARKERS = (INBOX_SECTION, LEGACY_INBOX_SECTION, "未解決の問い")
-# Fixed (functional) concept sections; every other ## is a topic section.
+# Fixed (functional) concept sections. --outline classifies headings with wiki_sections.section_kind,
+# which also treats bracketed variants (横断的知見(続き)) and reference lists (参照, 関連ページ) as functional.
 FIXED_SECTIONS = ("定義", "子概念", "未解決の問い", INBOX_SECTION, LEGACY_INBOX_SECTION, "関連", "出典")
 DEFAULT_TAIL = 15
 DEFAULT_BUDGET = 1800
@@ -310,11 +320,15 @@ def render_outline(rel, sections):
     for heading, block in sections:
         lines = block.splitlines(keepends=True)
         items = bullet_items(lines)
-        if heading in FIXED_SECTIONS:
+        kind = section_kind(heading)
+        if kind != KIND_TOPIC:
             label = heading
-            if heading == LEGACY_INBOX_SECTION:
+            if kind == KIND_INBOX and is_legacy_inbox_heading(heading):
                 label = f"{heading} (旧名; = {INBOX_SECTION})"
-            if heading == "定義":
+            if kind == KIND_INBOX:
+                # 空欄の案内文は観察ではないので数えない(wiki-concept-stats の inbox_bullets と同じ)
+                items = [(s, e) for s, e in items if not is_placeholder_bullet(lines[s])]
+            if kind == KIND_DEFINITION:
                 out.append(f"## {label}\n")
             else:
                 out.append(f"## {label}  ({len(items)} 件)\n")

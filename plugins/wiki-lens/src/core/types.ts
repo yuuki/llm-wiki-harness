@@ -120,7 +120,7 @@ export interface LogEvent {
 }
 
 export interface LogParseResult {
-	/** In log.md's listed order (newest first) */
+	/** Listed order (newest first): log.md, then wiki/log/YYYY-MM.md from the newest month */
 	events: LogEvent[];
 	/** Number of entries whose heading was found but couldn't be interpreted and were skipped */
 	failedCount: number;

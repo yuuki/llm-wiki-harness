@@ -3,12 +3,14 @@ type: meta
 title: "Wiki Token Discipline"
 date: 2026-08-30 16:20
 created: 2026-08-30
-updated: 2026-09-02
+updated: 2026-10-03
 tags:
   - 2026/08/30
   - meta
   - conventions
   - 2026/09/02
+  - 2026/09/27
+  - 2026/10/03
 status: evergreen
 related:
   - "[[conventions]]"
@@ -19,7 +21,7 @@ related:
 
 Navigation: [[conventions]] | [[index]]
 
-> [!important] ingest / query / retrieve / lint を実行するエージェントは、`wiki/index.md`・各 `_index.md`・`wiki/log.md`・`wiki/hot.md` の全文を読んではならない。発見はスクリプト、本文は節抽出、カタログ更新は追記コマンドに任せる。
+> [!important] ingest / query / retrieve / lint を実行するエージェントは、`wiki/index.md`・各 `_index.md`・`wiki/log.md`・`wiki/log/*.md`・`wiki/hot.md` の全文を読んではならない。発見はスクリプト、本文は節抽出、カタログ更新は追記コマンドに任せる。
 
 カタログ類は人間と Obsidian 向けの派生物である。エージェントの入力にしてはいけない。
 
@@ -28,9 +30,10 @@ Navigation: [[conventions]] | [[index]]
 次を `Read` してはならない。存在確認・追記・検索もスクリプトか `rg` で行う。
 
 - `wiki/index.md`
-- `wiki/log.md`
+- `wiki/log.md` と月次アーカイブ `wiki/log/*.md`
 - `wiki/{sources,entities,concepts}/_index.md`
 - `wiki/hot.md` の全文(クイック query だけ、後述の窓を `wiki-catalog.py trim-hot` 済み前提で読んでよい)
+- `.raw/.manifest.json`(2 MB を超える。1 件の確認は `python3 scripts/wiki-manifest.py get "<.raw/... キー>"`、記録は `put`。エントリは最上位に `.raw/...` をキーとして置く)
 
 例外: カタログ自体を直す保守作業(`wiki-refactor` の索引同期など)で、対象ファイルだけを読むとき。
 
@@ -91,17 +94,29 @@ EOF
 )"
 
 python3 scripts/wiki-catalog.py prepend-changelog \
-  --file wiki/concepts/_index.md --text "### YYYY-MM-DD ingest-paper | タイトル\n- 新規 concept: [[A]]\n"
+  --file wiki/concepts/_index.md --text "$(cat <<'EOF'
+### YYYY-MM-DD ingest-paper | タイトル
+- 新規 concept: [[A]]
+EOF
+)"
 
 python3 scripts/wiki-catalog.py add-catalog-line \
   --file wiki/concepts/_index.md \
   --section "現行コンセプトカタログ" \
   --line "- [[A]]"
 
-python3 scripts/wiki-catalog.py prepend-master --text "### YYYY-MM-DD ingest-paper | タイトル\n- Source: [[@...]]\n"
+python3 scripts/wiki-catalog.py prepend-master --text "$(cat <<'EOF'
+### YYYY-MM-DD ingest-paper | タイトル
+- Source: [[@...]]
+EOF
+)"
 ```
 
-`prepend-hot` はトークン予算(既定 2000、最大 5 エントリ)で古い窓を落とす。落ちたエントリは `wiki/log.md` に残っている前提であり、`trim-hot` 単体は log へコピーしない。ingest は必ず `prepend-log` してから `prepend-hot` する。
+複数行の `--text` は必ず heredoc で渡す。二重引用符の中の `\n` は改行にならず、カタログに文字のまま入る。
+
+`prepend-log` は月次でローテーションする。追記したエントリの月より前の月のエントリを `wiki/log/YYYY-MM.md`(`type: meta`、日付の新しい順)へ移す。基準は時計ではなく追記したエントリの見出しの日付で、日付の無いエントリは移さない。漏れは `wiki-doctor.py` の `log_rotation` が警告し、`python3 scripts/wiki-catalog.py rotate-log --month YYYY-MM` で手動でも回せる(冪等)。`wiki/log/` を Edit や `wiki-page-write.py` で書かない。
+
+`prepend-hot` はトークン予算(既定 2000、最大 5 エントリ)で古い窓を落とす。落ちたエントリは `wiki/log.md`(または月次アーカイブ)に残っている前提であり、`trim-hot` 単体は log へコピーしない。ingest は必ず `prepend-log` してから `prepend-hot` する。
 
 ## query の経路
 
@@ -151,11 +166,11 @@ python3 scripts/wiki-concept-stats.py --compile-debt            # 受信箱 5 �
 python3 scripts/wiki-concept-stats.py --compile-debt --min-inbox 10
 ```
 
-出力の各行は `path` / `inbox_bullets`(受信箱の箇条書き数、旧名含む)/ `topic_sections`(固定 6 節以外の `##` の数)/ `legacy_heading`(旧名 `## 横断的知見` が残っているか)を持つ。再編纂は `wiki-refactor` の再編纂様式で 1 ページずつ行い、ingest と混ぜない。
+出力の各行は `path` / `inbox_bullets`(受信箱の箇条書き数、旧名と `横断的知見(続き)` のような括弧付きの変種を含む。新設時の空欄の案内文は数えない)/ `topic_sections`(機能名の節を除いた `##` の数。固定 6 節とその変種のほか、`参照` `関連ページ` `主要ソース` のような参照一覧の節も主題節に数えない。判定は `scripts/wiki_sections.py`)/ `legacy_heading`(旧名 `## 横断的知見` が残っているか)を持つ。再編纂は `wiki-refactor` の再編纂様式で 1 ページずつ行い、ingest と混ぜない。
 
 ## retrieve の鮮度
 
-`.vault-meta/bm25` が取り込みより古いと、query が外れる。ingest の最後に必ず `wiki-retrieve-refresh.py --pages` を呼ぶ(BM25 のあと `wiki-graph.py build` で `.vault-meta/graph.json` も再構築する。graph 構築が落ちても retrieve の BM25 路は動く)。prefix か BM25 が非 0 なら refresh も非 0。全件作り直しは `wiki-retrieve-refresh.py --all`(wiki 全ページを歩くので、日常の ingest では使わない)。子プロセスは `WIKI_VAULT_ROOT` を見る。
+`.vault-meta/bm25` が取り込みより古いと、query が外れる。ingest の最後に必ず `wiki-retrieve-refresh.py --pages` を呼ぶ(BM25 のあと `wiki-graph.py build` で `.vault-meta/graph.json` も再構築する。graph 構築が落ちても retrieve の BM25 路は動く)。prefix か BM25 が非 0 なら refresh も非 0。BM25 は他の構築が握るロックを最大 180 秒待ち、待ち切れなければ非 0 になる。全件作り直しは `wiki-retrieve-refresh.py --all`(wiki 全ページを歩くので、日常の ingest では使わない)。retrieve の対象は `wiki/{sources,entities,concepts,questions,surveys}/` の知識ページだけで、カタログ(`index.md`・`log.md`・`hot.md`・`overview.md`・`_index.md`)、`log/`、`meta/`、`folds/`、`CLAUDE.md` は chunk にしない。`--all` は `contextual-prefix.py --prune` を通し、消えたページ・対象外のページ・今の address と食い違う古い chunk ディレクトリを消す。子プロセスは `WIKI_VAULT_ROOT` を見る。
 
 ## コンテキスト束
 

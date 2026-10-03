@@ -1,6 +1,6 @@
 # 並列 fan-out の詳細と事例
 
-`wiki-ingest-book` の従属資料。SKILL の「並列 fan-out」から移した逸話・失敗事例・長い説明である。規則の箇条書きは SKILL 側が正本である。
+`wiki-ingest-book` の従属資料。SKILL の「並列 fan-out」の詳細(逸話・失敗事例・長い説明)である。規則の箇条書きは SKILL 側が正本である。
 
 3 章以上は既定で **2 段階**(読み手 → 検査 → 書き手)の subagent 並行。**読み手と書き手は必ず別起動**する。プロトコルは汎用 `wiki-ingest` の「Batch Ingest › Parallel mode (subagents)」に従う。**1〜2 章は 1 体可**(断片 ingest。分離の固定費のほうが大きい)。
 
@@ -11,14 +11,14 @@
 3 章以上は 1 章につき **読み手 1 体と書き手 1 体**を別起動する。同一 subagent に「まず extract を書いてから、章本文を再読せずに書け」と 1 体で回してはならない。ターンをまたいで章本文が常駐文脈に残る。
 
 1. **読み手(extract):** 自章テキスト(`chapters/ch-NN.txt`)を全部読む。[`extract-schema.md`](extract-schema.md) どおり `<scratch>/extracts/ch-NN.md` を書く。**見出しは空でも残す(schema)。** wiki ページは書かない。catalog / book entity 禁止。git 禁止。完了報告は extract パスと一行要約と図表点数だけ。
-2. **検査:** 書き手起動前に `python3 scripts/wiki-extract-check.py --forbid-raw extracts/*.md` を 1 回かける。`MISSING` / `QUOTE-HEAVY` / `FORBID-RAW`・読み手失敗の章は書き手を起動せず、読み手をやり直す。
-3. **書き手(write):** extract と [`subagent-brief.md`](subagent-brief.md) の書き手節と書き手用 briefing を読む。**章本文の全文 Read はしない。** locator の確認は grep のみ。ピンポイント Read は **1 章あたり最大 2 箇所、各 80 行**。超えるなら読み手やり直し。画像は書き手用 briefing の図表表 + コンタクトシート + extract の「図表」節。`wiki-page-write.py` で章 source を作り、entity / concept をヘルパーで書く。
+2. **検査:** 書き手起動前に `python3 scripts/wiki-extract-check.py --forbid-raw <scratch>/extracts/*.md` を 1 回かける(vault ルートで実行し、extract はスクラッチの絶対パスで渡す)。`MISSING` / `QUOTE-HEAVY` / `FORBID-RAW`・読み手失敗の章は書き手を起動せず、読み手をやり直す。
+3. **書き手(write):** extract と [`subagent-brief.md`](subagent-brief.md) と書き手用 briefing を読む。**章本文の全文 Read はしない。** locator の確認は grep のみ。ピンポイント Read は **1 章あたり最大 2 箇所、各 80 行**。超えるなら読み手やり直し。画像は書き手用 briefing の図表表 + コンタクトシート + extract の「図表」節。`wiki-page-write.py` で章 source を作り、entity / concept をヘルパーで書く。
 
-**extract を `.raw` に置かない。** wiki にも置かない。git 管理しない。置き場は読み手用 briefing と同じスクラッチの `extracts/`(例: `/tmp/book-<slug>/extracts/ch-NN.md`)。
+**extract を `.raw` に置かない。** wiki にも置かない。git 管理しない。置き場は読み手用 briefing と同じスクラッチの `extracts/`(例: `$TMPDIR/book-<slug>/extracts/ch-NN.md`)。
 
-**briefing は読み手用と書き手用に分ける。** スクラッチに `briefing-extract.md` と `briefing-write.md` の 2 ファイルを書く。読み手の個別プロンプトは「まず `briefing-extract.md` を読む。`briefing-write.md` と brief の書き手節は読むな」+ 担当章の差分。書き手は「まず `briefing-write.md` を読む。章本文の原本は全文 Read するな」。1 ファイルにまとめるなら明確な 2 節にし、**読み手は書き手節を読むな**と書く。共通部分を 20 回書き写すと表記が揺れるので、書誌と訳語だけは両ファイルに同じ文面を置く。
+**briefing は読み手用と書き手用に分ける。** スクラッチに `briefing-extract.md` と `briefing-write.md` の 2 ファイルを書く。読み手の個別プロンプトは「まず [`reader-brief.md`](reader-brief.md) と `briefing-extract.md` を読む」+ 担当章の差分。書き手は「まず [`subagent-brief.md`](subagent-brief.md) と `briefing-write.md` を読む。章本文の原本は全文 Read するな」。読み手には書き手用のパスを渡さない。共通部分を 20 回書き写すと表記が揺れるので、書誌と訳語だけは両ファイルに同じ文面を置く。
 
-**フル SKILL は渡さない。** 読み手には extract-schema と brief の読み手節。書き手には brief の書き手節。
+**フル SKILL は渡さない。** 読み手には `reader-brief.md` と extract-schema。書き手には `subagent-brief.md`。
 
 オーケストレータが読み手に渡すもの: 書籍 slug と書誌 / 自章の原本パスとページ範囲 / extract 出力パス。`wiki-page-write` も本文テンプレも渡さない。
 
@@ -89,7 +89,7 @@ Bash の作業ディレクトリはツール呼び出しをまたいで持続す
 
 読み手の報告: extract パス / 一行要約 / 図表点数。wiki を書いたと言ってきたら誤りなので、その章の書き手は起動せず読み手をやり直す。
 
-書き手の報告(10 行以内): **作成・更新したページを source 以外も含めて全て列挙**(entity・concept を「候補」として省略せず、実際に作成/更新したなら確定事項として書く。オーケストレータの事後判断に委ねるのは「作るべきか迷うもの」だけ)/ 章の一行要約(book entity の「構成と主要テーマ」に使う)/ key_claims / 気づいた矛盾。
+書き手の報告: **作成・更新したページを source 以外も含めて全て列挙**(entity・concept を「候補」として省略せず、実際に作成/更新したなら確定事項として書く。オーケストレータの事後判断に委ねるのは「作るべきか迷うもの」だけ)/ 章の一行要約(book entity の「構成と主要テーマ」に使う)/ key_claims / 気づいた矛盾。
 
 **subagent の最終応答が完了報告になっていない場合がある**(例: 「Now update Fixstars entity...」のような次アクションの予告で応答が終わり、実際にはその編集が行われていないことがあった)。**オーケストレータは subagent の報告を鵜呑みにせず、fan-out 完了後に必ず `git status --porcelain=v1 -- wiki/ .raw/` で実際の新規(`??`)/変更(` M`)ファイルを確認し、報告内容と一致するか照合する。** 特に「更新した」と報告された entity/concept は `git diff -- <path>` で実際に今回分の差分が入っているか確認し、入っていなければ自分で追記する。「新規」か「更新」かの分類も、report の自己申告ではなく `git status` の `??`(新規)/`M`(既存)で判定し直す(例: 既存作成済み entity と誤認して「更新」と報告されるケースがあった)。
 
@@ -99,7 +99,7 @@ Bash の作業ディレクトリはツール呼び出しをまたいで持続す
 
 共有カタログ(`wiki/index.md`・各 `_index.md`・`hot.md`・`log.md`・`overview.md`・`.raw/.manifest.json`)と、**book entity ページ**。カタログは subagent が Read/Edit せず、fan-out 完了後に**オーケストレータだけが `wiki-catalog.py`**(prepend-log / prepend-hot / prepend-changelog / add-catalog-line / prepend-master)を呼ぶ。book entity は全章と接続するため、並列書き込みは lock があっても内容が衝突する。**オーケストレータだけが書く。**
 
-entity / concept ページは subagent が作成・更新してよい(lock 必須)。ただし複数章で同じ著者・概念が出る場合に備え、オーケストレータは事後に名寄せ・重複チェックを行う。
+entity / concept ページは subagent が作成・更新してよい(ヘルパー経由。ロックはヘルパーが取る)。ただし複数章で同じ著者・概念が出る場合に備え、オーケストレータは事後に名寄せ・重複チェックを行う。
 
 ---
 
@@ -123,7 +123,7 @@ log エントリはバッチ全体で 1 つ、commit も最後に 1 回。
 
 ## 10. 章検出の失敗事例
 
-SKILL の Step 0 から移した逸話。規則の箇条書きは SKILL 側が正本である。
+SKILL の Step 0 の実例。規則の箇条書きは SKILL 側が正本である。
 
 **少なすぎる(Part 単位への化け)。** 日本語書籍では outline の level 1 が「第Ⅰ部 SRE入門」のような部で、章は level 2 に並ぶことがある。この構成で level1-fallback が働くと、全 18 章が `chapters_count=13`(部+前付+付録+索引)のように化ける。実例(『SREをはじめよう』): level 1 が部・前付・付録、level 2 が「1章 はじめに」〜「18章 おわりに」。level 2 の開始ページから `--chapters "1=30,2=40,...,18=276,19=278,20=292,21=300,22=312"` を組み立てた(19〜21 は付録 A〜C、22 は索引以降を切り離すダミー章)。
 
@@ -143,7 +143,7 @@ bash scripts/fetch-book.sh --force --chapters "9=11,10=13,1=19,2=43,3=69,4=103,5
 
 ## 11. Step 0.3 の逸話
 
-- `chapter_NN=` の題は節題に化ける。本セッションでも 2 章「Bツリーの基本」が「2.1 二分探索木」、4 章「Bツリーの実装」が「4.1 ページヘッダ」として返った。章題は `toc.txt` から拾う。
+- `chapter_NN=` の題は節題に化ける。`--chapters` で手動指定したとき、題は指定した開始ページの outline エントリから引かれるので、章扉と同じページに節見出しがあると節題が章題として返る。実例: 2 章「Bツリーの基本」が「2.1 二分探索木」、4 章「Bツリーの実装」が「4.1 ページヘッダ」として返った。章題は `toc.txt` の章行から拾う。
 - 第 I 部と第 II 部に同題(「基本事項の紹介と概要」)が置かれる構成がある。担当 subagent に「あなたの担当は第 II 部の導入章」と書かないと、もう一方の章の内容を書きに行く。
 - 20 章規模は日付をまたぐ。各 subagent に日付を判断させると `2026/08/12` と `2026/08/13` が混ざった。
 - 骨格に書いた著者経歴はたいてい序文由来。実例では第 1 章担当が「指示された `contingency` は ch-01.txt に 1 度も現れない」と報告して誤りが発覚した。報告の「気づいた矛盾」を読み飛ばさない。

@@ -7,6 +7,10 @@ emits a single JSON file at .vault-meta/bm25/index.json with the schema below.
 
 Concurrency:
 - Locks .vault-meta/.bm25.lock (fcntl exclusive) around any index write.
+  A held lock is waited on (polling) for up to BM25_LOCK_WAIT_SEC seconds
+  (default 180) before giving up. Failing fast made a concurrent `--all`
+  rebuild in one session abort another session's `--pages` refresh, and
+  callers under `set -e` then skipped their ledger updates.
 - Atomic .tmp + rename for the index file.
 
 Index schema (.vault-meta/bm25/index.json):
@@ -31,7 +35,7 @@ Tokenization: NFKC + casefold. Latin (and other non-CJK \\w) words keep
 in-word apostrophes and hyphens. CJK runs become character bigrams; run
 edges are also unigrams. Adjacent digit↔CJK pairs emit a boundary bigram
 (e.g. 3台). ASCII digits are kept. ASCII stopwords filtered. Query and
-index must use the same function (`wiki_tokenize.tokenize`). Rebuild after
+index must use the same function (`wiki_cjk.tokenize`). Rebuild after
 upgrade (schema_version 4, tokenize cjk-bigram-v3).
 
 Query interface (used by retrieve.py at query time):
@@ -43,7 +47,7 @@ Build interface:
 
 Exit codes:
   0 — success
-  1 — lock acquisition failed
+  1 — lock acquisition timed out
   2 — usage error
   3 — index file missing or corrupt (query mode)
   4 — chunks directory missing
@@ -55,6 +59,7 @@ import json
 import math
 import os
 import sys
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,7 +67,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
-from wiki_tokenize import INDEX_SCHEMA_VERSION, TOKENIZE_ID, tokenize
+from wiki_cjk import INDEX_SCHEMA_VERSION, TOKENIZE_ID, tokenize
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 META_DIR = VAULT_ROOT / ".vault-meta"
@@ -77,6 +82,8 @@ SCHEMA_VERSION = INDEX_SCHEMA_VERSION
 
 EXIT_OK = 0
 EXIT_LOCK = 1
+LOCK_WAIT_SEC = float(os.environ.get("BM25_LOCK_WAIT_SEC", "180"))
+LOCK_POLL_SEC = 0.5
 EXIT_USAGE = 2
 EXIT_INDEX_MISSING = 3
 EXIT_NO_CHUNKS = 4
@@ -89,13 +96,21 @@ def log(msg):
 def acquire_lock():
     META_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(LOCK_PATH), os.O_CREAT | os.O_WRONLY, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(fd)
-        log("ERR: could not acquire bm25 lock")
-        sys.exit(EXIT_LOCK)
-    return fd
+    deadline = time.monotonic() + LOCK_WAIT_SEC
+    announced = False
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                log(f"ERR: could not acquire bm25 lock within {LOCK_WAIT_SEC:g}s")
+                sys.exit(EXIT_LOCK)
+            if not announced:
+                log("bm25 lock held by another build; waiting")
+                announced = True
+            time.sleep(LOCK_POLL_SEC)
 
 
 def release_lock(fd):

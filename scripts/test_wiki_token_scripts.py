@@ -376,6 +376,115 @@ d.
         )
         self.assertEqual(bad.returncode, 2)
 
+        # --page judges one page exactly; a title that is a substring of another never matches it.
+        page("障害予測", "未編纂の観察", 1, 2)
+        page("メモリ障害予測", "未編纂の観察", 9, 1)
+        one = run_script("wiki-concept-stats.py", ["--compile-debt", "--page", "障害予測"], self.vault)
+        self.assertEqual(one.returncode, 0, one.stderr)
+        row = json.loads(one.stdout)
+        self.assertEqual(row["path"], "wiki/concepts/障害予測.md")
+        self.assertFalse(row["in_debt"])
+        debt = run_script("wiki-concept-stats.py", ["--compile-debt", "--page", "wiki/concepts/メモリ障害予測.md"], self.vault)
+        self.assertEqual(debt.returncode, 1, debt.stderr)
+        self.assertTrue(json.loads(debt.stdout)["in_debt"])
+        missing = run_script("wiki-concept-stats.py", ["--compile-debt", "--page", "無い"], self.vault)
+        self.assertEqual(missing.returncode, 3)
+        alone = run_script("wiki-concept-stats.py", ["--page", "障害予測"], self.vault)
+        self.assertEqual(alone.returncode, 2)
+
+        # The header separates the debt count from the number shown under --limit.
+        limited = run_script("wiki-concept-stats.py", ["--compile-debt", "--limit", "1"], self.vault)
+        self.assertIn("in compile debt; showing 1 (--limit 1)", limited.stderr)
+
+    FUNCTIONAL_PAGE = """---
+type: concept
+title: "KPI"
+---
+
+# KPI
+
+## 定義
+
+d.
+
+## 検知器の選び方
+
+- **季節性の強い KPI では予測型の検知器が有利である**
+  - 根拠: [[@2018__WWW__Donut]] — 周期の強い KPI
+
+## 参照
+
+- [[@2018__WWW__Donut]]
+- [[@2015__IMC__Opprentice]]
+
+## 関連ページ
+
+- [[異常検知]]
+
+## 未解決の問い
+
+- q
+
+## 横断的知見
+
+- 現時点では単一ソースのため、横断的知見は未蓄積。今後の ingest で追記する。
+- obs 1 (Source: [[@2018__WWW__Donut]])
+- obs 2 (Source: [[@2015__IMC__Opprentice]])
+
+## 横断的知見(続き)
+
+- (このページは本ソースの取り込みで新規作成した。今後ここに追記する。)
+- obs 3 (Source: [[@2015__IMC__Opprentice]])
+
+## 関連
+
+## 出典
+"""
+
+    def test_functional_headings_and_inbox_placeholder_are_not_counted(self):
+        # `## 参照` `## 関連ページ` は主題節に数えない。受信箱の案内文は観察に数えない。
+        # `## 横断的知見(続き)` は受信箱の変種として受信箱に数える。stats と outline で同じ数になる。
+        self.write("wiki/concepts/KPI.md", self.FUNCTIONAL_PAGE)
+        proc = run_script("wiki-concept-stats.py", ["--compile-debt", "--page", "KPI"], self.vault)
+        row = json.loads(proc.stdout)
+        self.assertEqual(row["topic_sections"], 1)
+        self.assertEqual(row["inbox_bullets"], 3)
+        self.assertTrue(row["legacy_heading"])
+        out = run_script("wiki-excerpt.py", ["wiki/concepts/KPI.md", "--outline"], self.vault).stdout
+        self.assertIn("## 検知器の選び方  (1 命題)", out)
+        self.assertIn("## 参照  (2 件)", out)
+        self.assertIn("## 関連ページ  (1 件)", out)
+        self.assertIn("## 横断的知見 (旧名; = 未編纂の観察)  (2 件)", out)
+        self.assertIn("## 横断的知見(続き) (旧名; = 未編纂の観察)  (1 件)", out)
+        self.assertNotIn("命題)", out.split("## 参照")[1])
+
+    def test_placeholder_rule_keeps_real_observations(self):
+        sys.path.insert(0, str(SCRIPTS))
+        from wiki_sections import is_placeholder_bullet, section_kind
+        for text in (
+            "- ",
+            "- (1 ソース目: Singal+ arXiv2025 のみ)",
+            # 内側の括弧を閉じ忘れた案内文(インシデントトリアージの旧受信箱)
+            "- (このページは本ソースの取り込みで新規作成した。今後、他のソース([[DeepCT]]・[[DeepTriage]] 等が"
+            " ingest された際に観察をここに追記する。)",
+            "- 今後の取り込みで、複数ソース間の関係を追記する。",
+            "- 現時点では [[@2009__Mynavi__Book - Chapter 3]] のみが典拠であり、横断的知見はまだ蓄積されていない。"
+            "後続章が ingest され次第、ここへ積み増す。",
+        ):
+            self.assertTrue(is_placeholder_bullet(text), text)
+        for text in (
+            "- **初期割り当ての誤りは 2 つの実証研究で同じ桁になる**: (Source: [[@A]], [[@B]])",
+            "- 当初は単一ソース([[@2000__LISA__A]])のみだったが、2 ソース目として [[@2021__Book__B]] が"
+            "反例を提供した。今後も ingest され次第、比較を蓄積する。",
+            "- X と Y は同じ構造を持ち、今後の統合が期待される。",
+            "- obs (Source: [[@2018__WWW__Donut]])。今後の追記が要る。",
+            "- (A) と (B) は同じ構造を持つ",
+        ):
+            self.assertFalse(is_placeholder_bullet(text), text)
+        self.assertEqual(section_kind("関連概念との違い"), "topic")
+        self.assertEqual(section_kind("未解決の問い(追加)"), "questions")
+        self.assertEqual(section_kind("横断的知見（追記）"), "inbox")
+
     def test_prepend_hot_trims_max_entries_and_budget(self):
         old = "".join(
             f"## 2026-01-0{i} | old-{i}\n- Focus: f{i}\n- Key insight: k{i}\n\n"
@@ -687,7 +796,7 @@ title: "Congestion Control for RDMA"
         self.assertEqual(hits[0]["path"], "wiki/sources/@2024__SIGCOMM__Congestion.md")
 
     def test_concurrent_prepend_log_keeps_both(self):
-        self.write("wiki/log.md", "## [2026-01-01] seed\n- old\n")
+        self.write("wiki/log.md", "## [2026-08-01] seed\n- old\n")
         procs = []
         for i in (1, 2):
             procs.append(
@@ -699,7 +808,7 @@ title: "Congestion Control for RDMA"
             )
         # Sequential calls still take the lock; overlap via threads:
         import threading
-        self.write("wiki/log.md", "## [2026-01-01] seed\n- old\n")
+        self.write("wiki/log.md", "## [2026-08-01] seed\n- old\n")
         results = []
 
         def worker(n):
@@ -721,6 +830,63 @@ title: "Congestion Control for RDMA"
         self.assertIn("concurrent-1", text)
         self.assertIn("concurrent-2", text)
         self.assertIn("seed", text)
+
+    def test_prepend_log_rotates_older_months_to_archive(self):
+        self.write("wiki/log.md", "".join([
+            "## [2026-09-30] ingest | late-sep\n- a\n",
+            "## [2026-08-02] ingest | early-aug\n- b\n",
+            "## 2026-09-07 | ingest | odd-heading\n- c\n",
+            "## [2026-08-20] ingest | late-aug\n- d\n",
+        ]))
+        self.write("wiki/log/2026-09.md",
+                   "---\ntitle: \"wiki 操作ログ 2026-09\"\ntype: meta\n---\n\n"
+                   "# wiki 操作ログ 2026-09\n\n## [2026-09-01] ingest | archived\n- e\n")
+        proc = run_script("wiki-catalog.py",
+                          ["prepend-log", "--text", "## [2026-10-01] ingest | oct\n- f\n"], self.vault)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual((self.vault / "wiki/log.md").read_text(encoding="utf-8"),
+                         "## [2026-10-01] ingest | oct\n- f\n")
+        sep = (self.vault / "wiki/log/2026-09.md").read_text(encoding="utf-8")
+        self.assertTrue(sep.startswith("---\ntitle: \"wiki 操作ログ 2026-09\"\ntype: meta\n---\n"))
+        heads = [l for l in sep.splitlines() if l.startswith("## ")]
+        self.assertEqual(heads, ["## [2026-09-30] ingest | late-sep",
+                                 "## 2026-09-07 | ingest | odd-heading",
+                                 "## [2026-09-01] ingest | archived"])
+        aug = (self.vault / "wiki/log/2026-08.md").read_text(encoding="utf-8")
+        self.assertIn("type: meta", aug)
+        # Out-of-order entries are sorted newest first when archived.
+        self.assertLess(aug.index("late-aug"), aug.index("early-aug"))
+
+    def test_prepend_log_same_month_does_not_rotate(self):
+        self.write("wiki/log.md", "## [2026-10-01] ingest | a\n- a\n")
+        proc = run_script("wiki-catalog.py",
+                          ["prepend-log", "--text", "## [2026-10-02] ingest | b\n- b\n"], self.vault)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse((self.vault / "wiki/log").exists())
+        text = (self.vault / "wiki/log.md").read_text(encoding="utf-8")
+        self.assertLess(text.index("| b"), text.index("| a"))
+
+    def test_rotate_log_is_idempotent_after_interrupted_rotation(self):
+        entry = "## [2026-09-03] ingest | x\n- x\n"
+        self.write("wiki/log.md", "## [2026-10-01] ingest | now\n- n\n" + entry)
+        # Simulate a crash after the archive write but before the log rewrite.
+        self.write("wiki/log/2026-09.md", entry)
+        proc = run_script("wiki-catalog.py", ["rotate-log", "--month", "2026-10"], self.vault)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["moved"], {"2026-09": 1})
+        sep = (self.vault / "wiki/log/2026-09.md").read_text(encoding="utf-8")
+        self.assertEqual(sep.count("| x"), 1)
+        self.assertNotIn("| x", (self.vault / "wiki/log.md").read_text(encoding="utf-8"))
+        again = run_script("wiki-catalog.py", ["rotate-log", "--month", "2026-10"], self.vault)
+        self.assertEqual(json.loads(again.stdout)["moved"], {})
+        # Duplicates inside the log are history too: they move as they are.
+        dup = "## [2026-08-05] ingest | twice\n- t\n"
+        self.write("wiki/log.md", "## [2026-10-01] ingest | now\n- n\n" + dup + dup)
+        run_script("wiki-catalog.py", ["rotate-log", "--month", "2026-10"], self.vault)
+        aug = (self.vault / "wiki/log/2026-08.md").read_text(encoding="utf-8")
+        self.assertEqual(aug.count("| twice"), 2)
+        bad = run_script("wiki-catalog.py", ["rotate-log", "--month", "2026-1"], self.vault)
+        self.assertEqual(bad.returncode, 2)
 
     def test_refresh_nonzero_when_child_fails(self):
         proc = run_script(

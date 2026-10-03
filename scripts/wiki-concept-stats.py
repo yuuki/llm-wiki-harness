@@ -5,18 +5,29 @@ Usage:
   wiki-concept-stats.py [--json] [--min-bytes 50000] [--min-lines 250]
                         [--promote-children] [--limit 20]
   wiki-concept-stats.py --compile-debt [--min-inbox 5] [--min-orphan-inbox 15] [--limit 20]
+  wiki-concept-stats.py --compile-debt --page wiki/concepts/X.md
 
 Stdout: JSON list of hub rows. --promote-children / --repair-children rewrite ## 子概念 from related
 pages that are not themselves hub-sized. Does not move body insights.
 
 --compile-debt lists concept pages whose inbox (`## 未編纂の観察`, legacy
 `## 横断的知見`) holds >= --min-inbox top-level bullets, or that have no
-topic section at all and >= --min-orphan-inbox bullets. Sorted by inbox size.
+topic section at all and >= --min-orphan-inbox bullets. Cited assertions that
+ingest left in `## 未解決の問い` (question_assertions) count toward the inbox.
+Sorted by inbox size.
+With --page, judges exactly one page (exact path or title, no substring match)
+and prints one row with `in_debt`; the exit code is 1 when it is in debt.
 Every row (hub or debt) carries inbox_bullets / topic_sections / legacy_heading.
+Section kinds come from wiki_sections: reference-list headings (`## 参照`,
+`## 関連ページ`, …) are not topic sections, bracketed variants of the inbox
+(`## 横断的知見(続き)`) count as inbox, and the empty-inbox placeholder line
+(「現時点では単一ソースのため、今後追記する」) is not an observation.
 
 Exit codes:
-  0 — success
+  0 — success (with --page: the page has no compile debt)
+  1 — with --page: the page has compile debt
   2 — usage error
+  3 — with --page: page not found
 """
 
 import argparse
@@ -32,11 +43,19 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 from wiki_lock import page_lock
+from wiki_questions import is_stray_assertion
+# FIXED_HEADINGS / INBOX_HEADING / LEGACY_INBOX_HEADING / QUESTIONS_HEADING は他スクリプトが
+# このモジュール経由で参照するので残す(wiki_claims ほか)。
+from wiki_sections import (FIXED_HEADINGS, INBOX_HEADING, KIND_INBOX, KIND_QUESTIONS,  # noqa: F401
+                           KIND_TOPIC, LEGACY_INBOX_HEADING, QUESTIONS_HEADING, is_legacy_inbox_heading,
+                           is_placeholder_bullet, section_kind)
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 
 EXIT_OK = 0
+EXIT_IN_DEBT = 1
 EXIT_USAGE = 2
+EXIT_MISSING = 3
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:\|[^\]]*)?\]\]")
 CHILD_HEADING_RE = re.compile(r"^## 子概念\s*$", flags=re.M)
@@ -44,11 +63,6 @@ DEF_HEADING_RE = re.compile(r"^## 定義\s*$", flags=re.M)
 H2_RE = re.compile(r"^## ", flags=re.M)
 TOP_BULLET_RE = re.compile(r"^[-*] ", flags=re.M)
 
-INBOX_HEADING = "未編纂の観察"
-LEGACY_INBOX_HEADING = "横断的知見"
-FIXED_HEADINGS = frozenset({
-    "定義", "子概念", "未解決の問い", INBOX_HEADING, LEGACY_INBOX_HEADING, "関連", "出典",
-})
 DEFAULT_MIN_INBOX = 5
 DEFAULT_MIN_ORPHAN_INBOX = 15
 
@@ -240,19 +254,73 @@ def h2_sections(body):
     return out
 
 
+def inbox_bullet_count(block):
+    """受信箱の観察数。空欄の案内文(wiki_sections.is_placeholder_bullet)は観察ではないので数えない。"""
+    return sum(1 for line in block.splitlines()
+               if TOP_BULLET_RE.match(line) and not is_placeholder_bullet(line))
+
+
 def compile_metrics(body):
-    """inbox_bullets / topic_sections / legacy_heading for one concept body."""
+    """inbox_bullets / topic_sections / legacy_heading / question_assertions for one concept body.
+
+    節の分類は wiki_sections.section_kind に従う。`横断的知見(続き)` のような受信箱の変種は受信箱に、
+    `## 参照` `## 関連ページ` のような参照一覧の節はどこにも数えない(主題節ではない)。
+    question_assertions は `## 未解決の問い` に紛れた出典付きの断定(wiki_questions の判定)。
+    ingest が問い節を第二の受信箱にした分で、再編纂が主題節へ畳む対象なので負債に数える。
+    """
     inbox = 0
     topics = 0
     legacy = False
+    question_assertions = 0
     for heading, block in h2_sections(body):
-        if heading in (INBOX_HEADING, LEGACY_INBOX_HEADING):
-            inbox += len(TOP_BULLET_RE.findall(block))
-            if heading == LEGACY_INBOX_HEADING:
+        kind = section_kind(heading)
+        if kind == KIND_INBOX:
+            inbox += inbox_bullet_count(block)
+            if is_legacy_inbox_heading(heading):
                 legacy = True
-        elif heading not in FIXED_HEADINGS:
+        elif kind == KIND_QUESTIONS:
+            question_assertions += sum(1 for line in block.splitlines()
+                                       if line.startswith(("- ", "* ")) and is_stray_assertion(line))
+        elif kind == KIND_TOPIC:
             topics += 1
-    return {"inbox_bullets": inbox, "topic_sections": topics, "legacy_heading": legacy}
+    return {"inbox_bullets": inbox, "topic_sections": topics, "legacy_heading": legacy,
+            "question_assertions": question_assertions}
+
+
+def in_compile_debt(metrics, min_inbox, min_orphan_inbox):
+    inbox = metrics["inbox_bullets"] + metrics.get("question_assertions", 0)
+    return inbox >= min_inbox or (metrics["topic_sections"] == 0 and inbox >= min_orphan_inbox)
+
+
+def compile_debt_row(path, text, min_inbox, min_orphan_inbox):
+    fm, body = split_frontmatter(text)
+    metrics = compile_metrics(body)
+    title = fm.get("title")
+    if not title or isinstance(title, list):
+        title = path.stem
+    row = {
+        "path": path.resolve().relative_to(VAULT_ROOT.resolve()).as_posix(),
+        "title": str(title).strip() or path.stem,
+        "lines": len(text.splitlines()),
+        "has_child_section": bool(CHILD_HEADING_RE.search(text)),
+    }
+    row.update(metrics)
+    row["in_debt"] = in_compile_debt(metrics, min_inbox, min_orphan_inbox)
+    return row
+
+
+def resolve_concept_page(page):
+    """Exact path or exact title/stem. Never a substring match."""
+    raw = page.strip()
+    if raw.startswith("[[") and raw.endswith("]]"):
+        raw = raw[2:-2].split("|", 1)[0]
+    candidate = Path(raw)
+    for p in (candidate, VAULT_ROOT / candidate):
+        if p.suffix == ".md" and p.is_file():
+            return p
+    name = raw[:-3] if raw.endswith(".md") else raw
+    path = VAULT_ROOT / "wiki" / "concepts" / f"{Path(name).name}.md"
+    return path if path.is_file() else None
 
 
 def scan_compile_debt(min_inbox, min_orphan_inbox):
@@ -265,7 +333,7 @@ def scan_compile_debt(min_inbox, min_orphan_inbox):
         fm, body = split_frontmatter(text)
         metrics = compile_metrics(body)
         inbox = metrics["inbox_bullets"]
-        if inbox < min_inbox and not (metrics["topic_sections"] == 0 and inbox >= min_orphan_inbox):
+        if not in_compile_debt(metrics, min_inbox, min_orphan_inbox):
             continue
         title = fm.get("title")
         if not title or isinstance(title, list):
@@ -391,6 +459,7 @@ def main(argv=None):
                         help="Inbox bullets that flag compile debt (default 5).")
     parser.add_argument("--min-orphan-inbox", type=int, default=DEFAULT_MIN_ORPHAN_INBOX,
                         help="Inbox bullets that flag debt when the page has no topic section (default 15).")
+    parser.add_argument("--page", help="With --compile-debt: judge one page (exact path or title). Exit 1 if in debt.")
     args = parser.parse_args(argv)
 
     if args.min_bytes < 0 or args.min_lines < 0:
@@ -403,12 +472,26 @@ def main(argv=None):
         log("ERR: --min-inbox and --min-orphan-inbox must be >= 0")
         return EXIT_USAGE
 
+    if args.page and not args.compile_debt:
+        log("ERR: --page requires --compile-debt")
+        return EXIT_USAGE
+
     if args.compile_debt:
         if args.promote_children or args.repair_children:
             log("ERR: --compile-debt cannot be combined with --promote-children / --repair-children")
             return EXIT_USAGE
+        if args.page:
+            path = resolve_concept_page(args.page)
+            if path is None:
+                log(f"ERR: page not found: {args.page}")
+                return EXIT_MISSING
+            row = compile_debt_row(path, path.read_text(encoding="utf-8"), args.min_inbox, args.min_orphan_inbox)
+            print(json.dumps(row, ensure_ascii=False, indent=2))
+            return EXIT_IN_DEBT if row["in_debt"] else EXIT_OK
         debt = scan_compile_debt(args.min_inbox, args.min_orphan_inbox)
-        log(f"wiki-concept-stats: {min(len(debt), args.limit)} page(s) with compile debt (of {len(debt)})")
+        total = len(list_concept_files())
+        log(f"wiki-concept-stats: {len(debt)} of {total} concept page(s) in compile debt; "
+            f"showing {min(len(debt), args.limit)} (--limit {args.limit})")
         print(json.dumps(debt[: args.limit], ensure_ascii=False, indent=2))
         return EXIT_OK
 

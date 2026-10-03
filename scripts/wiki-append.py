@@ -62,6 +62,7 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 import wiki_lock
+from wiki_questions import is_asserted_proposition, is_stray_assertion
 
 VAULT_ROOT = Path(
     os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent
@@ -92,6 +93,10 @@ DATE_TAG_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 
 CATALOG_FILES = ("wiki/index.md", "wiki/hot.md", "wiki/log.md")
 
+# concept ページで section_append が書いてよい節。主題節・定義・子概念・問い・受信箱には書かない
+# (観察は observations、問いは questions_add を使う。conventions §8 更新ルール 2)。
+CONCEPT_SECTION_APPEND_ALLOWED = (RELATED, SOURCES)
+
 
 def log(msg):
     print(msg, file=sys.stderr)
@@ -115,7 +120,7 @@ def normalize_rel(raw):
         return None, "wiki ページは .md でなければならない: %s" % text
     if Path(rel).parts[:1] != ("wiki",):
         return None, "wiki/ 配下のパスだけを受け付ける: %s" % text
-    if rel in CATALOG_FILES or Path(rel).name == "_index.md":
+    if rel in CATALOG_FILES or Path(rel).name == "_index.md" or rel.startswith("wiki/log/"):
         return None, "%s はカタログである。wiki-catalog.py で更新する" % rel
     # シンボリックリンクを辿った先が wiki/ の外なら、ロック層で 75 になる前に
     # パスエラーとして落とす(wiki-lock.sh の validate_path と同じ判定)。
@@ -821,7 +826,32 @@ def as_list(value):
     return list(value)
 
 
+def validate_operation(op, result):
+    """書き込み先と中身の規約違反を、ページに触る前に弾く。"""
+    is_concept = result.page.startswith("wiki/concepts/")
+    for item in as_list(op.get("observations")):
+        if "[[" not in str(item):
+            result.warnings.append("観察に出典の wikilink が無い: %r。受信箱の観察は "
+                                   "`(Source: [[@...]])` を持つ(conventions §8)" % str(item)[:60])
+    for item in as_list(op.get("questions_add")):
+        text = str(item)
+        if is_asserted_proposition(text):
+            raise PageError("問い節に出典付きの命題を書こうとした: %r。断定は observations へ、"
+                            "問い節には問いか未解決点だけを書く(conventions §8)" % text[:80])
+        if is_stray_assertion(text):
+            result.warnings.append("問いに見えない出典付きの項目を問い節へ足した: %r。"
+                                   "断定なら observations へ移す" % text[:60])
+    if is_concept:
+        for spec in as_list(op.get("section_append")):
+            name = str((spec or {}).get("section") or "").strip() if isinstance(spec, dict) else ""
+            if name and name not in CONCEPT_SECTION_APPEND_ALLOWED:
+                raise PageError("concept の section_append は %s だけに書ける(`## %s` は不可)。"
+                                "主題節・定義は再編纂が書き、観察は observations、問いは questions_add で足す"
+                                "(conventions §8)" % (" / ".join(CONCEPT_SECTION_APPEND_ALLOWED), name))
+
+
 def apply_operation(page, op, result):
+    validate_operation(op, result)
     changed = False
     observations = as_list(op.get("observations"))
     if observations:

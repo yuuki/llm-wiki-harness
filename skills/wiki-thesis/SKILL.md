@@ -1,11 +1,11 @@
 ---
 name: wiki-thesis
-description: "wiki の蓄積で 1 つの命題(主張)を判定する。命題を変数・予測・反証条件に分解し、支持 / 反対 / 機序 / メタ / 隣接の 5 つの角度で根拠を集め、2 周目で弱い側を狙って補い、supported / partially / contradicted / insufficient / mixed のいずれかを根拠表と反証条件つきで `wiki/questions/` に `type: thesis` として保存する。concept ページの `## 未解決の問い` を判定で閉じる手続きでもある。Triggers: 'この命題を検証して', '〜は本当か', '〜と言えるか', '〜という主張を判定して', 'thesis:', '/wiki-thesis', '未解決の問いを判定して', '〜は成り立つか', 'verify this claim against the wiki'. 単発の問いへの引用付き回答は wiki-query、設計空間や文献地図の長編編纂は wiki-survey、既存命題が引く出典の照合は claim-audit(wiki-refactor)、wiki に文献がほとんど無い段階は autoresearch / wiki-ingest-*(本 skill は insufficient で差し戻す)。"
+description: "wiki の蓄積で 1 つの命題(主張)を判定する。支持 / 反対 / 機序 / メタ / 隣接の 5 つの角度で根拠を集め、supported / partially / contradicted / insufficient / mixed のいずれかを、根拠表と反証条件つきで `wiki/questions/` に `type: thesis` として保存する。concept ページの `## 未解決の問い` を判定で閉じる手続きでもある。Triggers: 'この命題を検証して', '〜は本当か', '〜と言えるか', 'thesis:', '未解決の問いを判定して', 'verify this claim against the wiki'. 単発の問いへの引用付き回答は wiki-query、長編編纂は wiki-survey、既存命題が引く出典の照合は claim-audit(wiki-refactor)、wiki に文献がほとんど無い段階は autoresearch / wiki-ingest-*(本 skill は insufficient で差し戻す)。"
 ---
 
 # wiki-thesis: 命題の判定
 
-`wiki-query` は問いに答え、`wiki-survey` は地図を書く。どちらにも無いのは、1 つの主張を**判定で閉じる**手続きである。concept ページの `## 未解決の問い` は ingest のたびに増えるが、落とす側の手続きが無いと受信箱が膨らむ。本 skill は 1 つの命題を受け取り、wiki の蓄積だけを根拠に、根拠表と判定と反証条件を 1 枚のページにして `wiki/questions/` に保存する。
+`wiki-query` は問いに答え、`wiki-survey` は地図を書く。どちらにも無いのは、1 つの主張を**判定で閉じる**手続きである。concept ページの `## 未解決の問い` は ingest のたびに増えるが、落とす側の手続きが無いので溜まる。本 skill は 1 つの命題を受け取り、wiki の蓄積だけを根拠に、根拠表と判定と反証条件を 1 枚のページにして `wiki/questions/` に保存する。
 
 出力は `wiki/questions/<タイトル>.md` の 1 枚(`type: thesis`)と、出自ページがあればその `## 未解決の問い` からの削除と `## 未編纂の観察` への 1 行である。
 
@@ -66,7 +66,7 @@ python3 scripts/retrieve.py "<機序を問う形: なぜ X なら Y か>" --top 
 python3 scripts/contradiction-index.py --query <主語の語> <述語の語> --limit 10
 
 # 3. 命題に触れる concept が既に命題を持っているなら、その命題と出典の対を取る
-python3 scripts/claim-audit.py sample --pages "wiki/concepts/<concept>.md" --per-page 30 --reaudit > /tmp/thesis-claims.json
+python3 scripts/claim-audit.py sample --pages "wiki/concepts/<concept>.md" --per-page 30 --reaudit > "$TMPDIR/thesis-claims.json"
 
 # 4. 名前が出た entity と source の実在確認
 python3 scripts/wiki-resolve.py "<名前>" --type any
@@ -93,7 +93,7 @@ python3 scripts/wiki-resolve.py "<名前>" --type any
 進め方は候補の規模で決める。
 
 - 候補ページが **8 枚以下**なら、メイン文脈が 5 つの角度を順に当てる。1 ページを読むたびに 5 角度すべてを問う(角度ごとに読み直さない)。
-- **9 枚以上**なら、角度ごとに Explore subagent を 1 体、計 5 体を並列投入する。ブリーフは [`references/pass-brief.md`](references/pass-brief.md) §2 の雛形を使う。**「担当ページに書かれていないことは推測せず『記載なし』と明記する」を必ず入れる**。subagent にファイルを書かせない。結果はテキストで返させ、Write はフェーズ 5 でメイン文脈が 1 回だけ行う。
+- **9 枚以上**なら、角度ごとに読み取り専用の subagent を 1 体、計 5 体を並列投入する(型は `general-purpose`。根拠の強さを判定する作業なので、所在を探すだけの探索用の型は使わない)。ブリーフは [`references/pass-brief.md`](references/pass-brief.md) §2 の雛形を使う。**「担当ページに書かれていないことは推測せず『記載なし』と明記する」を必ず入れる**。subagent にファイルを書かせない。結果はテキストで返させ、Write はフェーズ 5 でメイン文脈が 1 回だけ行う。
 
 根拠は 1 件ごとに次の形で控える(フェーズ 5 の根拠表の行になる)。
 
@@ -135,7 +135,7 @@ python3 scripts/wiki-resolve.py "<名前>" --type any
 本文を組み立て終えてから、1 回の呼び出しで書く。`wiki-page-write.py` が採番・検証・ロック・書き込みを行う。
 
 ```bash
-python3 scripts/wiki-page-write.py "wiki/questions/<タイトル>.md" --content-file /tmp/thesis.md
+python3 scripts/wiki-page-write.py "wiki/questions/<タイトル>.md" --content-file "$TMPDIR/thesis.md"
 ```
 
 frontmatter は conventions §2 の標準に `thesis` 固有フィールド(§3)を足す。
@@ -206,7 +206,7 @@ sources:
 
 - 数値は評価条件を添える。異なる設定の数値を同じ行で比べない。
 - 出典は全て `@` 付き(conventions §4)。`papers/` を意図的に指すときだけパス修飾する。
-- 保存後に検査する。wikilink の実在(wiki-survey skill フェーズ 6 の検査 1 と同じ手順)、数値の遡及(根拠表の数値を出典ページに `rg` で確かめる)、整文(ダッシュ 0 件、wikilink を除いた中黒 0 件。数値や条件の並列「387 回・0.895 ms」は読点にする)。直しは `wiki-lock.sh acquire` と `release` で包む。
+- 保存後に検査する。wikilink の実在(`python3 scripts/wiki-survey-check.py check "wiki/questions/<タイトル>.md" --only wikilinks`)、数値の遡及(根拠表の数値を出典ページに `rg` で確かめる)、整文(ダッシュ 0 件、wikilink を除いた並列の中黒 0 件。人名と固有名詞の内部のカタカナに挟まれた中黒は残してよい。wiki-survey と同じ基準である。数値や条件の並列「387 回・0.895 ms」は読点にする)。直しは `wiki-lock.sh acquire` と `release` で包む。
 - contradicted または mixed のとき、対立する source ページ同士に `> [!contradiction]` callout が無ければ、フェーズ 6 で両ページに足す(conventions §5)。
 
 ### フェーズ 6　出自ページへの反映
@@ -253,7 +253,7 @@ python3 scripts/wiki-catalog.py prepend-hot --text "## YYYY-MM-DD | wiki-thesis 
 python3 scripts/wiki-retrieve-refresh.py --pages "wiki/questions/<title>.md" "wiki/concepts/<origin>.md" --no-llm
 ```
 
-コミットは `wiki: judge <title>`。出自ページの変更と矛盾 callout は別コミットにする。
+コミットは `wiki: judge <title>`。出自ページの変更と矛盾 callout は別コミットにする。どのコミットも、作成・更新したパスだけを `git commit -m "..." -- <パス列挙>` で渡して対象を限定する(wiki/CLAUDE.md 鉄則 8。並行セッションが stage した変更を巻き込まない)。
 
 ---
 

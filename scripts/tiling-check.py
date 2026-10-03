@@ -65,7 +65,7 @@ EXCLUDE_FILENAMES = {
     "_index.md", "index.md", "log.md", "hot.md", "overview.md",
     "dashboard.md", "Wiki Map.md", "getting-started.md",
 }
-EXCLUDE_PATH_PREFIXES = ("wiki/folds/", "wiki/meta/", "wiki/asks/", "wiki/briefs/")
+EXCLUDE_PATH_PREFIXES = ("wiki/folds/", "wiki/meta/", "wiki/asks/", "wiki/briefs/", "wiki/log/")
 MAX_BODY_BYTES = 128 * 1024
 SCALE_WARN_PAGES = 500
 SCALE_HARD_FAIL_PAGES = 5000

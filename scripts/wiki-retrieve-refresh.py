@@ -72,7 +72,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Refresh contextual chunks and BM25.")
     parser.add_argument("--pages", nargs="+", help="Vault-relative page paths")
     parser.add_argument("--all", action="store_true",
-                        help="Rechunk knowledge wiki pages (asks/briefs は除外)")
+                        help="Rechunk knowledge wiki pages and prune stale/non-source chunks")
     parser.add_argument("--no-llm", action="store_true", default=True,
                         help="Synthetic prefixes (default). Kept for CLI compatibility.")
     parser.add_argument("--allow-egress", action="store_true",
@@ -107,8 +107,9 @@ def main(argv=None):
     failed = False
 
     if args.all:
-        log("wiki-retrieve-refresh: --all walks knowledge wiki/*.md (asks/briefs は除外); prefer --pages on ingest")
-        cmd = [sys.executable, str(prefix_py), "--all", *prefix_flags]
+        log("wiki-retrieve-refresh: --all walks knowledge pages and prunes stale chunks; prefer --pages on ingest")
+        # 全件走査のついでに、対象外や古い address の chunk を消す(BM25 は chunks/ を全件読む)
+        cmd = [sys.executable, str(prefix_py), "--all", "--prune", *prefix_flags]
         log(f"wiki-retrieve-refresh: {' '.join(cmd)}")
         proc = run_logged(cmd)
         scraped_pages, wrote, skipped = scrape_prefix_stderr(proc.stderr)
