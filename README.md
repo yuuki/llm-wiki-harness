@@ -2,7 +2,7 @@
 
 研究用 Obsidian vault で育てた **LLM wiki の再利用可能なハーネス**である。知識そのもの（論文要約、概念本文、教科書）は含まない。入れるのは、取り込み・照会・編纂・点検の手順と、それを支えるスクリプト、規約、可視化プラグインである。
 
-チャットは操作面、成果物は vault 内の `wiki/` ページである。
+利用者はチャットで skill を呼び、結果は vault 内の `wiki/` ページとして残る。
 
 ## 入れるもの / 入れないもの
 
@@ -11,7 +11,13 @@
 - 媒体別 ingest（論文・書籍・博士論文・スライド・動画）と、vault 側で分岐した `wiki-ingest` / `wiki-query` / `wiki-lint`
 - `wiki-survey` / `wiki-survey-recommend` / `wiki-publish` / `wiki-gap` / `wiki-refactor` / `wiki-thesis` / `wiki-ideate` / `wiki-ask-source` / `wiki-brief-source` / `wiki-related`
 - 日本語整文（`japanese-tech-writing` と `conventions/japanese-style.md`）
-- トークン規律用スクリプト（`wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` ほか）と、編纂・検索の補助（`contradiction-index.py` / `recompile-queue.py` / `claim-audit.py` / `wiki-graph.py` / `wiki-related.py` / `wiki-clusters.py` / `concept-candidates.py` / `concept-resolve.py` / `paper-ids.py` / `paper-refs.py` / `entity-resolve.py` / `wiki-profile.py` / `wiki-context-pack.py` / `wiki-doctor.py` / `wiki-manifest.py` / `recompile-finalize.sh` / `wiki-survey-check.py` / `wiki-survey-recommend.py` / `address-backfill.py`）
+- スクリプト
+  - トークン規律: `wiki-resolve.py` / `wiki-excerpt.py` / `wiki-catalog.py` / `wiki-context-pack.py` ほか
+  - 検索と近傍: `retrieve.py` / `wiki-graph.py` / `wiki-related.py` / `wiki-clusters.py`
+  - 編纂と再検証: `contradiction-index.py` / `recompile-queue.py` / `recompile-finalize.sh` / `claim-audit.py`
+  - 台帳と名寄せ: `concept-candidates.py` / `concept-resolve.py` / `paper-ids.py` / `paper-refs.py` / `entity-resolve.py` / `wiki-manifest.py`
+  - サーベイ: `wiki-survey-recommend.py` / `wiki-survey-check.py`
+  - 点検: `wiki-doctor.py` / `address-backfill.py`、関心の要約: `wiki-profile.py`
 - 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
 - 読み取り専用の Obsidian プラグイン `wiki-lens`
 
@@ -21,14 +27,14 @@
 - 既存ノート層向け skill（`create-paper-note` / `create-conference-note` / `create-tech-note`）
 - 上流 claude-obsidian の足場そのもの（`wiki` スキャフォールド、`wiki-fold`、`wiki-cli`、`wiki-mode`、`autoresearch`、`save`、`canvas`）
 
-上流は [claude-obsidian](https://github.com/agricidaniel/claude-obsidian) を vault に入れる。本リポジトリはその上に重ねる特化層である。分岐ファイルの由来は [`NOTICE.md`](NOTICE.md)。利用者向けの差分は [`CHANGELOG.md`](CHANGELOG.md)。
+上流の [claude-obsidian](https://github.com/agricidaniel/claude-obsidian) は別途 vault に入れておく。本リポジトリは、その上に重ねる特化層である。分岐したファイルの由来は [`NOTICE.md`](NOTICE.md)、利用者向けの差分は [`CHANGELOG.md`](CHANGELOG.md) にある。
 
 ## 前提
 
-- Obsidian 1.5 以降（`wiki-lens` はデスクトップ専用、WebGL が要る）
-- Python 3、`pdftotext`（poppler）、論文画像抽出には Node（pdf.js）、ベクター図のクロップには PyMuPDF（`uv run --with pymupdf`）
-- 並行書き込みには `flock`（macOS では util-linux の keg-only で入ることが多い）
-- エージェント runtime は Claude Code / Codex / Cursor など、Agent Skills を読めるもの
+- Obsidian 1.5 以降（`wiki-lens` はデスクトップ専用で、WebGL が要る）
+- Python 3、`pdftotext`（poppler）。論文の画像抽出には Node（pdf.js）、ベクター図のクロップには PyMuPDF（`uv run --with pymupdf`）
+- 並行書き込みには `flock`（macOS では util-linux に含まれ、keg-only で入ることが多い）
+- Agent Skills を読めるエージェントの実行環境（Claude Code / Codex / Cursor など）
 
 ## vault への展開
 
@@ -36,7 +42,7 @@
 ./install.sh /path/to/your-vault
 ```
 
-`install.sh` は次をコピーする。既存の `wiki/CLAUDE.md` とカタログ類は上書きしない。規約 3 枚（`conventions.md` / `japanese-style.md` / `token-discipline.md`）は `wiki/meta/` へ上書きコピーする。
+`install.sh` は次の表のとおりにコピーする。既存の `wiki/CLAUDE.md` とカタログ類は上書きしない。規約 3 枚（`conventions.md` / `japanese-style.md` / `token-discipline.md`）だけは `wiki/meta/` へ上書きでコピーする。
 
 | このリポジトリ | vault での位置 |
 |---|---|
@@ -66,7 +72,7 @@ wiki/sources ──► wiki/entities
               ├── wiki/asks（既読 1 source の軽い Q&A。知識索引には入れない）
               ├── wiki/briefs（配布用紹介文。知識索引には入れない）
               ├── wiki/surveys
-              ├── wiki-ideate → research/ideas/（無いレイヤーなら承認後も $TMPDIR）
+              ├── wiki-ideate → research/ideas/（無ければ承認後も $TMPDIR）
               └── wiki-publish → notes/（任意）
 
 見る: wiki-lens（書かない）。開いているページの隣は `wiki-related`
@@ -74,46 +80,46 @@ wiki/sources ──► wiki/entities
 衛生: wiki-doctor のあと wiki-lint
 ```
 
-入口は媒体、出口は設問の形で選ぶ。行数や文献本数では決めない。
+取り込みの skill は入力の媒体で選び、出力の skill は設問の形で選ぶ。出力の行数や文献の本数では選ばない。
 
 | 入力 | skill |
 |---|---|
 | arXiv / 論文 PDF | `wiki-ingest-paper` |
 | 書籍 | `wiki-ingest-book`（1 章 = source 1） |
-| 博士・長編サーベイ | `wiki-ingest-thesis` |
+| 博士論文・長編サーベイ | `wiki-ingest-thesis` |
 | スライド | `wiki-ingest-slides` |
 | 動画 | `wiki-ingest-video` |
 | 一般 URL | `wiki-ingest` |
 
 | 設問 | skill |
 |---|---|
-| 開いている 1 ページの隣・配役 | `wiki-related`（stdout。`retrieve.py` は使わない） |
-| 単発・1 ソース・2 対象の差分 | `wiki-query` |
+| 開いている 1 ページの隣（役割つき） | `wiki-related`（stdout だけ。`retrieve.py` は使わない） |
+| 単発の問い・1 ソースの解説・2 対象の差分 | `wiki-query` |
 | 既読 1 source の軽い確認・深掘り | `wiki-ask-source`（`wiki/asks/`） |
 | 既読 1 source の配布用紹介文 | `wiki-brief-source`（`wiki/briefs/`。旧名 `summarize-paper-note`） |
 | 1 つの命題の判定（支持 / 反対 / 機序） | `wiki-thesis`（`wiki/questions/`、`type: thesis`） |
 | サーベイのテーマが未定 | `wiki-survey-recommend`（候補の推薦だけ） |
 | 設計空間・文献地図・対象の像 | `wiki-survey` |
-| ギャップや閉じなかった命題からの着想 1 本 | `wiki-ideate`（承認後 `research/ideas/`。無いレイヤーなら `$TMPDIR`） |
-| wiki 外の読者へ | `wiki-publish` |
+| ギャップや閉じなかった命題からの着想 1 本 | `wiki-ideate`（承認後 `research/ideas/`。無ければ `$TMPDIR`） |
+| 完成したサーベイを wiki 外の読者向けに清書 | `wiki-publish` |
 
 ## 規約
 
-正本は 3 枚である。エージェントはカタログ（`index.md` / `log.md` / `hot.md`）を全文読まない。
+正本は次の 3 枚である。エージェントはカタログ（`index.md` / `log.md` / `hot.md`）を全文読まない。
 
 - [`conventions/conventions.md`](conventions/conventions.md) — ページ形式、出典、concept の受信箱と再編纂
 - [`conventions/japanese-style.md`](conventions/japanese-style.md) — 常体、カタカナ / 漢語 / 原語の寄せ方
 - [`conventions/token-discipline.md`](conventions/token-discipline.md) — resolve / excerpt / catalog / retrieve / context-pack
 
-関心の軸は任意の `profile.md`（`WIKI_PROFILE_PATH`、または `research/curation/profile.md` / `wiki/meta/profile.md`）を `wiki-profile.py` が要約する。query / survey の枠付けと survey のテーマ推薦が読む。concept の新設・保留の判断には使わない。無い vault では終了 3 になり、関心判定を飛ばす。
+研究関心のプロファイル（任意の `profile.md`）は `wiki-profile.py` が要約する。探す順は `WIKI_PROFILE_PATH`、`research/curation/profile.md`、`wiki/meta/profile.md` である。要約を読むのは query / survey の枠付けと survey のテーマ推薦で、concept を新設するかどうかの判断には使わない。プロファイルが無い vault では `wiki-profile.py` が終了コード 3 を返し、呼び出し側は関心判定を飛ばす。
 
-既存ノートと共存させるときの原則（一次ノートを書き換えない、source に `@` を付ける）も conventions に残してある。別レイヤーが無い vault では、その節を読み飛ばしてよい。
+既存ノートと共存させるときの原則（一次ノートを書き換えない、source に `@` を付ける）も conventions に残してある。別のノート層が無い vault では、その節を読み飛ばしてよい。
 
 ## wiki-lens（Obsidian プラグイン）
 
-`plugins/wiki-lens` は配布可能な Obsidian プラグインである。ノートは書かない。通信しない。見る対象は `wiki/` だけ。`install.sh` は `.obsidian` の有無にかかわらず、`<vault>/.obsidian/plugins/wiki-lens` へ置き、`community-plugins.json` に `wiki-lens` を足す。
+`plugins/wiki-lens` は配布できる Obsidian プラグインである。ノートは書かず、通信もしない。見る対象は `wiki/` だけである。`install.sh` は `.obsidian` の有無にかかわらず `<vault>/.obsidian/plugins/wiki-lens` へ置き、`community-plugins.json` に `wiki-lens` を足す。
 
-プラグインだけ欲しいとき:
+プラグインだけを入れるとき:
 
 ```bash
 ./plugins/wiki-lens/install-to-vault.sh /path/to/your-vault
@@ -121,25 +127,16 @@ wiki/sources ──► wiki/entities
 
 そのあと Obsidian を再読み込みし、コミュニティプラグインで Wiki Lens をオンにする。
 
-| ビュー | 問い |
+| ビュー | 答える問い |
 |---|---|
 | Health Dashboard | 健全か |
-| Backbone Graph | 形は何か |
-| Local Lens | 今のノートの近傍か |
+| Backbone Graph | 全体の形は何か |
+| Local Lens | 今のノートの近傍に何があるか |
 | Growth Timeline | どう増えたか |
 | 3D Layers | 層はどう結合するか |
 | Gap Finder | 無い接続は何か |
 
-構造の検出までがプラグイン、意味の判定と橋渡し文献は `wiki-gap` である。案内は [`plugins/wiki-lens/README.md`](plugins/wiki-lens/README.md)。算法は [`plugins/wiki-lens/docs/algorithms.md`](plugins/wiki-lens/docs/algorithms.md)。画面の Louvain と、スキルが使う無向 Blondel（`wiki-clusters.py`、[`docs/theme-chunks-algorithm.md`](plugins/wiki-lens/docs/theme-chunks-algorithm.md)）は別物である。ingest だけがテーマ塊を呼び、`wiki-gap` / `wiki-survey` は呼ばない。
-
-索引を全消しして作り直すときは `clusters.json` も消す。本ハーネスに `wiki-retrieve` skill は無い（上流）。
-
-```bash
-rm -rf .vault-meta/chunks/ .vault-meta/bm25/ .vault-meta/embed-cache.json .vault-meta/graph.json .vault-meta/clusters.json .vault-meta/related/
-bash bin/setup-retrieve.sh
-python3 scripts/wiki-graph.py build
-python3 scripts/wiki-clusters.py build
-```
+構造の検出まではプラグインが受け持ち、意味の判定と橋渡し文献の推薦は `wiki-gap` が受け持つ。使い方は [`plugins/wiki-lens/README.md`](plugins/wiki-lens/README.md)、アルゴリズムは [`plugins/wiki-lens/docs/algorithms.md`](plugins/wiki-lens/docs/algorithms.md) にある。画面のクラスタリング（Louvain）と、skill が使うテーマ塊（無向 Blondel。`wiki-clusters.py`、[`docs/theme-chunks-algorithm.md`](plugins/wiki-lens/docs/theme-chunks-algorithm.md)）は別物である。テーマ塊を使うのは ingest だけで、`wiki-gap` / `wiki-survey` は使わない。
 
 ビルド済みの `main.js` を同梱している。ソースから作り直すなら:
 
@@ -150,9 +147,20 @@ npm test
 npm run build
 ```
 
+## 索引の作り直し
+
+retrieve の索引を全部消して作り直すときは、グラフとテーマ塊のキャッシュも一緒に消す。`wiki-retrieve` skill は上流の claude-obsidian 側にあり、本ハーネスには含まない。
+
+```bash
+rm -rf .vault-meta/chunks/ .vault-meta/bm25/ .vault-meta/embed-cache.json .vault-meta/graph.json .vault-meta/clusters.json .vault-meta/related/
+bash bin/setup-retrieve.sh
+python3 scripts/wiki-graph.py build
+python3 scripts/wiki-clusters.py build
+```
+
 ## スクリプトの試験
 
-vault に入れたあと、vault ルートで:
+vault に入れたあと、vault ルートで次を走らせる。
 
 ```bash
 python3 scripts/test_wiki_token_scripts.py
@@ -183,7 +191,9 @@ python3 scripts/test_wiki_survey_check.py
 python3 scripts/test_wiki_survey_recommend.py
 ```
 
-`wiki-lens` は `cd plugins/wiki-lens && npm test`。
+`test_wiki_related.py` の 1 件は `templates/wiki-CLAUDE.md` を読むので、このリポジトリのルートで走らせる。`test_contact_sheet.py` と `test-paper-image-extraction.sh` は、それぞれ `uv` と pdf.js が入った環境で走らせる。
+
+`wiki-lens` の試験は `cd plugins/wiki-lens && npm test` で走らせる。
 
 ## 変更履歴
 
@@ -191,4 +201,4 @@ python3 scripts/test_wiki_survey_recommend.py
 
 ## ライセンス
 
-MIT。`LICENSE` を見ること。上流由来は `NOTICE.md`。
+MIT である。全文は `LICENSE`、上流由来のファイルは `NOTICE.md` にある。

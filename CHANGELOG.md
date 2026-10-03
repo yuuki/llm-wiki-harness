@@ -10,10 +10,10 @@
 
 ### Added
 
-- `wiki-survey-recommend`。設問が未定のとき、蓄積から `wiki-survey` のテーマ候補を ready / 姉妹 / 要 ingest / 別 skill に振り分ける。機械信号は `wiki-survey-recommend.py`（stdout だけ見る）。
+- `wiki-survey-recommend`。設問が未定のとき、蓄積から `wiki-survey` のテーマ候補を ready / 姉妹 / 要 ingest / 別 skill に振り分ける。判定の材料は `wiki-survey-recommend.py` が出し、skill はその stdout だけを見る。
 - `wiki-survey-check.py`。`wiki/surveys/` 長編ページの検証（wikilink・画像の実在、ダッシュと中黒、LLM 口調、同一出典の連続一文一段落、図番号、sources の同期）を 1 コマンドにし、`stats` で既存ページを実測する。`wiki-survey` に既存ページの増補の流れを足した。
-- `concept-resolve.py`。概念の方言帰着（対の提案・lookup・新設ゲート）。`wiki-resolve.py` が `dialect-gate` を返した候補は、ingest が concept を新設せず台帳に積む。
-- `paper-refs.py`。取り込み済み論文の文献表から識別子候補を `.vault-meta/paper-ref-candidates.json` に積む（本文の `[N]` と節見出しから役割、直前窓から対比を数える）。自動 ingest はしない。
+- `concept-resolve.py`。表記の揺れ（方言）で分かれた概念を同じページへ寄せる。統合候補の対の提案、lookup、新設のゲートを持つ。`wiki-resolve.py` が `dialect-gate` を返した候補について、ingest は concept を新設せず台帳に積む。
+- `paper-refs.py`。取り込み済み論文の文献表から識別子候補を `.vault-meta/paper-ref-candidates.json` に積む。本文の `[N]` と節見出しから引用の役割を、直前の文脈から対比の言及を数える。候補を自動で ingest はしない。
 - `recompile-finalize.sh`。再編纂 1 ページ分の確定を、台帳 → 索引 → パス限定コミットの順で行う。索引の失敗では止まらない。
 - `wiki_questions.py`。`## 未解決の問い` に紛れた出典付きの断定を数える。`wiki-append.py` は問い節への出典付きの命題の追記を拒み（紛らわしい項目は WARN）、`wiki-concept-stats.py` は compile 負債に数える。
 - `wiki_sections.py`。concept の機能節と主題節の分け方を `wiki-concept-stats.py` / `wiki-excerpt.py --outline` / `wiki_claims.py` で共有する（参照一覧の節と受信箱の案内文を主題・観察に数えない）。
@@ -21,10 +21,10 @@
 - `address-backfill.py`。`address:` を持たないページへの後付け採番。`wiki-doctor.py` が欠落を報告する。
 - `crop-paper-figures.py`。論文のベクター図をキャプション基準でクロップする（二段組みで本文を巻き込まない）。
 - `video-add-frames.py`。選んだ候補フレームを `.raw/videos/<slug>/frames/` へ続き番号で足す。
-- `claim-audit.py numbers`。命題・根拠行・ingest の観察の数値を source ページと `.raw` の抽出テキストに機械照合する。ingest-paper / book / thesis の書き手も書いた直後に使う。
+- `claim-audit.py numbers`。命題・根拠行・ingest の観察の数値を、source ページと `.raw` の抽出テキストに機械で照合する。`wiki-ingest-paper` / `wiki-ingest-book` / `wiki-ingest-thesis` も、source を書いた直後にこれで照合する。
 - `wiki/log.md` の月次ローテーション。`wiki-catalog.py prepend-log` が過去月のエントリを `wiki/log/YYYY-MM.md` へ移す。`wiki-doctor.py` が移し漏れを検査する。
 - `wiki-ingest-book` の章ブリーフを役割で分け、読み手用の `references/reader-brief.md` を足した。
-- 規約: 数式は Obsidian の `$` / `$$` 記法だけを使う。
+- 規約に、数式は Obsidian の `$` / `$$` 記法だけで書くという規則を足した。
 
 ### Changed
 
@@ -32,13 +32,13 @@
 - retrieve の対象を知識ページ（`wiki/{sources,entities,concepts,questions,surveys}/`）に絞り、カタログ・`log/`・`meta/` を chunk にしない。`wiki-retrieve-refresh.py --all` は `contextual-prefix.py --prune` で古い chunk を消す。
 - BM25 の構築は他の構築が握るロックを最大 180 秒待つ（`BM25_LOCK_WAIT_SEC`）。`recompile-queue.py` と claim-audit の台帳も read-modify-write をロックで囲む。
 - `templates/wiki-CLAUDE.md` に並行セッションの規則（全件再構築を避ける、台帳を索引の後ろに `set -e` で繋がない、パス限定コミット）を足した。
-- `wiki-refactor` の再編纂と命題再検証の手順を固めた（統合見出し、出典の無い散文、問い節の断定、矛盾、定義前の段落の扱い。確定は `recompile-finalize.sh`）。
-- 並列 fan-out の book / thesis で、concept の新設枠を章の書き手に配らずオーケストレータが名指しする。
+- `wiki-refactor` の再編纂と命題再検証の手順を具体化した（統合見出し、出典の無い散文、問い節の断定、矛盾、定義前の段落の扱い。確定は `recompile-finalize.sh`）。
+- `wiki-ingest-book` / `wiki-ingest-thesis` を章ごとに並列で動かすとき、concept の新設枠を章の書き手に配らない。新設する concept と担当章はオーケストレータが名指しする。
 - `wiki-ask-source` / `wiki-brief-source` は採番に失敗したらノートを保存しない（address カウンタを手で読み書きしない）。
 - `wiki-brief-source` の紹介文に論旨の順（課題 → 既存の限界 → 中核アイデア → 仕組み → 検証設定 → 主要結果 → 限界 → 含意）を定め、10 行を基本に 20 行まで伸ばしてよいとした。
 - `wiki-publish` は本文の `(Source: [[...]])` を主張と出典の対応の正本とし、書誌は source の frontmatter から集める。
 - `wiki-ingest-paper` は原本の Abstract を `> [!abstract] 概要` callout に置く。
-- `wiki-ingest-video` の取得と、スライドのフレーム選びを堅くした（`prepare-video-source.sh`）。
+- `wiki-ingest-video` で、動画の取得を失敗に強くし、スライドを映したフレームの選び方を改めた（`prepare-video-source.sh`）。
 - wiki-lens 0.2.0。Growth Timeline が `wiki/log.md` に加えて `wiki/log/YYYY-MM.md` の月次アーカイブも読む。
 
 ### Removed

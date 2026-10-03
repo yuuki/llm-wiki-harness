@@ -2,24 +2,24 @@
 
 LLM wiki レイヤー（`wiki/{sources,entities,concepts,questions}/`）の健全性・骨格・近傍・成長・多層・間隙を見る、読み取り専用の Obsidian プラグインである。
 
-ノートは書かない。通信しない。索引は Obsidian の `metadataCache` と、時間軸の注釈だけ `wiki/log.md` を読む。vault の一次ノート層は見ない。
+ノートは書かず、通信もしない。グラフは Obsidian の `metadataCache` から組み立てる。ファイルを直接読むのは時間軸の注釈だけで、対象は `wiki/log.md` と月次アーカイブ `wiki/log/YYYY-MM.md` である。vault の一次ノート層は見ない。
 
-英語の原版は [`README.en.md`](README.en.md)。設計は [`docs/design.md`](docs/design.md)、実装は [`docs/implementation.md`](docs/implementation.md)、算法は [`docs/algorithms.md`](docs/algorithms.md)。画面の Louvain と、スキル世界のテーマ塊（無向 Blondel。[`docs/clusters-for-skills.md`](docs/clusters-for-skills.md) / [`docs/theme-chunks-algorithm.md`](docs/theme-chunks-algorithm.md)）は別物である。
+英語の原版は [`README.en.md`](README.en.md) にある。設計は [`docs/design.md`](docs/design.md)、実装は [`docs/implementation.md`](docs/implementation.md)、アルゴリズムは [`docs/algorithms.md`](docs/algorithms.md) に書いた。画面のクラスタリング（Louvain）と、skill が使うテーマ塊（無向 Blondel。[`docs/clusters-for-skills.md`](docs/clusters-for-skills.md) / [`docs/theme-chunks-algorithm.md`](docs/theme-chunks-algorithm.md)）は別物である。
 
 ## 6 つのビュー
 
-| ビュー | 問い | 要点 |
+| ビュー | 答える問い | 要点 |
 |---|---|---|
 | Health Dashboard | 健全か | 件数、死リンクの原因分類、育てる seed、孤立、basename 衝突 |
-| Backbone Graph | 形は何か | Louvain クラスタの俯瞰、全ノード、1 クラスタの中 |
-| Local Lens | 今読んでいるものの近傍 | Personalized PageRank。欠ページは赤い幽霊 |
+| Backbone Graph | 全体の形は何か | Louvain クラスタの俯瞰、全ノード、1 クラスタの中 |
+| Local Lens | 今読んでいるノートの近傍に何があるか | Personalized PageRank。欠ページは赤い幽霊 |
 | Growth Timeline | どう増えたか | `created` で再生。2 時点差分。種別ごとの枚数 |
 | 3D Layers | 層はどう結合するか | Z = ページ種別。XY は同じ ForceAtlas2 |
 | Gap Finder | 無い接続は何か | 疎なクラスタ対、共引用、予測辺、未取り込み文献 |
 
 リボンとコマンドパレット（`Wiki Lens: Open …`）から開く。
 
-Gap Finder の **Copy report** は構造候補だけを出す。意味の判定と橋渡し文献は vault 側の `wiki-gap` skill である。プラグインは offline のまま。
+Gap Finder の **Copy report** は構造上の候補だけを出す。意味の判定と橋渡し文献の推薦は、vault 側の `wiki-gap` skill が行う。プラグイン自体は通信しない。
 
 ## 標準グラフとの差
 
@@ -47,7 +47,7 @@ Gap Finder の **Copy report** は構造候補だけを出す。意味の判定�
 2. `<vault>/.obsidian/community-plugins.json` に `"wiki-lens"` を足す
 3. Obsidian を再読み込みし、コミュニティプラグインで Wiki Lens をオンにする
 
-制限: Obsidian 1.5 以降、デスクトップ専用、WebGL が要る。無いときはグラフビューがメッセージに落ちる。
+動作条件は Obsidian 1.5 以降のデスクトップ版で、WebGL が要る。WebGL が無い環境では、グラフビューの代わりに案内文を出す。
 
 ## 開発
 
@@ -59,7 +59,7 @@ npm run dev      # 監視ビルド
 npm run build    # 型検査 + 本番 main.js
 ```
 
-`main.js` は esbuild がまとめる。実行時依存は graphology（Louvain / ForceAtlas2）、sigma v3、three.js（3D は描画だけ。力計算はしない）。
+`main.js` は esbuild でまとめる。実行時の依存は graphology（Louvain / ForceAtlas2）、sigma v3、three.js である。three.js は 3D の描画だけに使い、力計算はしない。
 
 Obsidian が起動しているときの確認:
 

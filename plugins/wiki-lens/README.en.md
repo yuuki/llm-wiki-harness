@@ -2,7 +2,7 @@
 
 A **read-only** Obsidian plugin that visualizes the health, explorability, and growth of the LLM wiki layer (`wiki/{sources,entities,concepts,questions}/`) in this vault.
 
-The plugin never writes to any note. It only reads Obsidian's `metadataCache` (plus one best-effort read of `wiki/log.md`), and it makes no network requests — everything runs locally.
+The plugin never writes to any note. It only reads Obsidian's `metadataCache` (plus a best-effort read of `wiki/log.md` and its monthly archives `wiki/log/YYYY-MM.md`), and it makes no network requests — everything runs locally.
 
 On-screen Louvain (`src/core/cluster.ts`) is not the skill-world theme-chunk cache. Agents use undirected Blondel via `scripts/wiki-clusters.py` ([`docs/clusters-for-skills.md`](docs/clusters-for-skills.md), [`docs/theme-chunks-algorithm.md`](docs/theme-chunks-algorithm.md)).
 
@@ -29,7 +29,7 @@ Opens in **Overview** mode: Louvain communities collapsed into super-nodes, with
 
 ### Gap Finder
 
-Surfaces connections that *should* exist but don't, from four structural signals: **Cluster gaps** (cluster pairs wired together far less than a degree-preserving null model predicts), **Concept pairs** (concepts co-cited by ≥3 common sources yet never linked), **Predicted links** (Adamic-Adar link prediction, cross-cluster by default), and **Bridge literature** (`@`-prefixed papers cited in the wiki but never ingested, ranked by demand). Candidates draw as dashed overlay lines — dashed because these links do not exist (yet); selecting a candidate isolates the involved clusters/nodes. **Copy report** exports the full analysis as Markdown for the vault's `wiki-gap` skill, which validates candidates against domain knowledge and recommends bridging literature verified via the Semantic Scholar / arXiv APIs (the plugin itself stays offline).
+Surfaces connections that *should* exist but don't, from four structural signals: **Cluster gaps** (cluster pairs wired together far less than a degree-preserving null model predicts), **Concept pairs** (concepts co-cited by ≥3 common sources yet never linked), **Predicted links** (Adamic-Adar link prediction, cross-cluster by default), and **Bridge literature** (`@`-prefixed papers cited in the wiki but never ingested, ranked by demand). Candidates draw as dashed overlay lines — dashed because these links do not exist (yet); selecting a candidate isolates the involved clusters/nodes. **Copy report** exports the full analysis as Markdown for the vault's `wiki-gap` skill, which validates candidates against domain knowledge and recommends bridging literature verified identifier-first via arXiv / DBLP / Crossref (the plugin itself stays offline).
 
 ### Local Lens
 
@@ -37,7 +37,7 @@ Lives in the right sidebar and follows the active note (only wiki pages move the
 
 ### Growth Timeline
 
-**Replay** scrubs (or auto-plays) through time; pages appear on the day their `created` frontmatter says they were born, and recent appearances are highlighted. **Diff** compares two dates A → B and lists new pages, updated pages, and new links, cross-referenced with operation entries parsed from `wiki/log.md` (click an entry to highlight the pages it touched).
+**Replay** scrubs (or auto-plays) through time; pages appear on the day their `created` frontmatter says they were born, and recent appearances are highlighted. **Diff** compares two dates A → B and lists new pages, updated pages, and new links, cross-referenced with operation entries parsed from `wiki/log.md` and `wiki/log/YYYY-MM.md` (click an entry to highlight the pages it touched).
 
 A **node-count chart** sits under the type bar: one line (or daily stacked bars) per page type, plus an optional total. The playhead follows Replay; click a day to seek (Replay only). Diff shades A→B. The chart counts every wiki page (Health's population), not the pruned backbone. **Exclude seed entities** drops seed stubs only — isolated pages stay, so the totals will not match the backbone node count. Its type legend is independent of the spatial type checkboxes. Pages with an unknown `created` date are counted as present before the first day (and sit in the first Daily bar together with that day's births).
 

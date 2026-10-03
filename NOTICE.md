@@ -1,6 +1,6 @@
 # 第三者由来のファイル
 
-本リポジトリの一部は、[claude-obsidian](https://github.com/agricidaniel/claude-obsidian)（MIT License, Copyright (c) 2026 AgriciDaniel / AI Marketing Hub）を、研究用 vault で分岐したものである。
+本リポジトリの一部のファイルは、[claude-obsidian](https://github.com/agricidaniel/claude-obsidian) を研究用 vault で分岐させたものである。claude-obsidian は MIT License で配布されており、著作権表示は Copyright (c) 2026 AgriciDaniel / AI Marketing Hub である。
 
 該当しやすいもの:
 
