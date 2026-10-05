@@ -18,7 +18,7 @@ Run lint after every 10-15 ingests, or weekly. Output a lint report to `wiki/met
 
 ## Lint Checks
 
-Run check 18 (doctor) first, then work through 1–17 in order:
+Run check 18 (doctor) first, then work through 1–17 and 19 in order:
 
 1. **Orphan pages**. Wiki pages with no inbound wikilinks. They exist but nothing points to them.
 2. **Dead links**. Wikilinks that reference a page that does not exist.
@@ -101,6 +101,14 @@ Run check 18 (doctor) first, then work through 1–17 in order:
 
     Read-only. Apply the printed `fix:` commands yourself only for the derived caches (`wiki-retrieve-refresh.py`, `wiki-graph.py build`, `wiki-clusters.py build`, `paper-ids.py scan --write-index`, `contradiction-index.py --write`) and stale locks (`wiki-lock.sh reap`); everything else (duplicate `address:`, manifest gaps, `*.tmp` residue that may belong to a concurrent ingest, corrupt ledgers) is **Needs review**. Paste the table as **## Doctor** at the top of the report.
 
+19. **Retractions** (conventions §3). Source pages carry `doi:`; an ingested paper that was later retracted must not keep supporting concept claims silently. This check asks OpenAlex (`is_retracted`) for every `doi:` in `wiki/sources/` in batches of 50 (about 20 requests, within the free daily budget; no key needed). Only DOIs leave the vault.
+
+    ```bash
+    python3 scripts/bib-lookup.py retracted        # paste as ## Retractions
+    ```
+
+    Each `RETRACTED` row is **Needs review**: open the source page, mark it with a `> [!warning]` retraction note, and check the concept pages that cite it (wiki-refactor 命題を再検証). Never delete the page. Exit 4 (free budget exhausted) or 5 (network) means write 「撤回照会を実行できなかった」 and continue; do not retry in a loop. The sandbox needs `api.openalex.org`. When `paper-ids.py report` lists an arXiv-only source whose published version may exist, `python3 scripts/bib-lookup.py pair <published-doi>` resolves the arXiv id from OpenAlex `locations` (one-way: published DOI to arXiv; an arXiv DOI itself returns 404).
+
 ---
 
 ## Lint Report Format
@@ -168,6 +176,9 @@ status: developing
 
 ## Paper Ref Candidates
 (paste `python3 scripts/paper-refs.py report --write` stdout verbatim; `ready` rows are proposals for the human, not auto-ingest. If the command exits 1, write 「台帳が読めない」 and continue. If it exits 75 after one retry, paste stdout and do not add the generated note)
+
+## Retractions
+(paste `python3 scripts/bib-lookup.py retracted` stdout verbatim; every `RETRACTED` row is Needs review. On exit 4 or 5 write 「撤回照会を実行できなかった」)
 
 ## Entity Aliases
 (paste `python3 scripts/entity-resolve.py report` verbatim; every pair is Needs review for wiki-refactor 統合, never auto-merged)

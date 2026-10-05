@@ -12,6 +12,10 @@ Pipeline (v1.7):
          →  drill            (return chunk pages with absolute paths so the
                               caller can Read them and synthesize)
 
+The pipeline lives in `Searcher.search()`; the CLI builds one Searcher per
+call; a long-lived caller may keep one resident. The BM25 index is read from the SQLite
+mirror (`.vault-meta/bm25/index.sqlite`) when it is current, else from JSON.
+
 Loads sibling scripts as Python modules (no subprocess overhead). Falls back
 gracefully when index or rerank stage is missing:
 - If .vault-meta/bm25/index.json is absent     → exit 10 with friendly message;
@@ -218,6 +222,172 @@ def rrf_fuse(candidates, added, boosted):
     return [c for _, _, c in fused]
 
 
+class Searcher:
+    """検索に要るモジュールと索引を持ち回る。CLI は 1 回、MCP サーバは常駐で使う。
+
+    BM25 索引は SQLite 鏡像があればそれを開く(数十 MB)。無ければ JSON を読む(数 GB)。
+    索引ファイルやグラフが作り直されたら、次の検索で読み直す。
+    """
+
+    def __init__(self):
+        self.bm25 = import_sibling("bm25_index", "bm25-index.py")
+        self.reranker = import_sibling("rerank", "rerank.py")
+        self._graph_mod = None
+        self._prefix_mod = None
+        self._index = None
+        self._index_stamp = None
+        self._graph = None
+        self._graph_stamp = None
+
+    @staticmethod
+    def _stamp(*paths):
+        out = []
+        for p in paths:
+            try:
+                st = p.stat()
+                out.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append(None)
+        return tuple(out)
+
+    def index(self):
+        stamp = self._stamp(BM25_INDEX, getattr(self.bm25, "SQLITE_PATH", BM25_INDEX))
+        if self._index is None or stamp != self._index_stamp:
+            loader = getattr(self.bm25, "load_fast_index", self.bm25.load_index)
+            self._index = loader()
+            self._index_stamp = stamp
+        return self._index
+
+    def graph(self):
+        if not GRAPH_JSON.is_file():
+            return None
+        stamp = self._stamp(GRAPH_JSON)
+        if self._graph_mod is None:
+            self._graph_mod = import_sibling("wiki_graph", "wiki-graph.py")
+            self._prefix_mod = import_sibling("contextual_prefix", "contextual-prefix.py")
+        if self._graph is None or stamp != self._graph_stamp:
+            self._graph = self._graph_mod.load_graph(GRAPH_JSON)
+            self._graph_stamp = stamp
+        return self._graph
+
+    def search(self, query, top=5, bm25_top=20, no_rerank=False, explain=False,
+               allow_remote_ollama=False, no_graph=False, graph_top=5, graph_seeds=5,
+               graph_hops=1, graph_people=False):
+        bm25 = self.bm25
+        bm25_index = self.index()
+
+        bm25_hits = bm25.query(query, top_k=bm25_top, index=bm25_index)
+        log(f"bm25: {len(bm25_hits)} hits")
+
+        candidates = []
+        for h in bm25_hits:
+            chunk_path = VAULT_ROOT / h["path"]
+            try:
+                chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            candidates.append({
+                "chunk_id": h["chunk_id"],
+                "page_address": chunk.get("page_address"),
+                "page_path": chunk.get("page_path"),
+                "absolute_path": str((VAULT_ROOT / chunk.get("page_path", "")).resolve()),
+                "chunk_index": chunk.get("chunk_index"),
+                "bm25_score": h["score"],
+                "path": h["path"],
+                "snippet": chunk_snippet(chunk),
+            })
+
+        graph_info = {"active": False}
+        graph = self.graph() if (not no_graph and candidates) else None
+        if graph and not self._graph_mod.graph_is_empty(graph):
+            graph_mod, prefix_mod = self._graph_mod, self._prefix_mod
+
+            def address_of(page):
+                node = graph["nodes"].get(page) or {}
+                if node.get("address"):
+                    return node["address"]
+                try:
+                    return prefix_mod.derive_synthetic_address(VAULT_ROOT / page)
+                except (ValueError, AttributeError):
+                    return None
+
+            added, boosted, via_by_page = graph_channel(
+                graph_mod, graph, candidates, graph_seeds, graph_hops, graph_top, address_of,
+                skip_subtypes=frozenset() if graph_people else SKIP_SUBTYPES,
+                bm25_mod=bm25, index=bm25_index, query_text=query,
+            )
+            for c in candidates:
+                page = c.get("page_path")
+                if page in boosted and via_by_page.get(page):
+                    c["via"] = via_by_page[page]
+            via_count = sum(len(c.get("via") or []) for c in added)
+            via_count += sum(len(c.get("via") or []) for c in candidates if c.get("page_path") in boosted)
+            graph_info = {
+                "active": True,
+                "seeds": min(graph_seeds, len({c["page_path"] for c in candidates})),
+                "added": [c["page_path"] for c in added],
+                "boosted": sorted(boosted, key=lambda p: -boosted[p]),
+                "via_count": via_count,
+            }
+            if added or boosted:
+                candidates = rrf_fuse(candidates, added, boosted)
+                log(f"graph: +{len(added)} page(s), {len(boosted)} boosted")
+
+        if no_rerank:
+            final = candidates[:top]
+            strategy = "bm25-only"
+            for c in final:
+                c["rerank_score"] = c["bm25_score"]
+                c["rerank_source"] = "skipped"
+        else:
+            final = self.reranker.rerank(
+                query, candidates, top_k=top,
+                allow_remote=allow_remote_ollama,
+            )
+            # Derive strategy from first candidate's rerank_source
+            first_src = (final[0].get("rerank_source") if final else "unknown")
+            strategy = f"bm25+rerank:{first_src}"
+        if graph_info["active"] and (graph_info["added"] or graph_info["boosted"]):
+            strategy += "+graph"
+
+        # Dedupe by page (we may have multiple chunks of the same page; collapse to best)
+        by_page = {}
+        for c in final:
+            addr = c.get("page_address")
+            if addr not in by_page or c.get("rerank_score", 0) > by_page[addr].get("rerank_score", 0):
+                by_page[addr] = c
+        deduped = list(by_page.values())
+        deduped.sort(key=lambda c: c.get("rerank_score", 0), reverse=True)
+
+        out = {
+            "query": query,
+            "strategy": strategy,
+            "top_k": top,
+            "candidates": deduped[:top],
+        }
+        if explain:
+            out["explain"] = {
+                "bm25_candidate_count": len(bm25_hits),
+                "post_rerank_count": len(final),
+                "deduped_count": len(deduped),
+                "bm25_top_param": bm25_top,
+                "graph": graph_info,
+            }
+        return out
+
+
+def provisioned():
+    """索引とチャンクがあれば None、無ければ利用者向けの説明文を返す。"""
+    if not BM25_INDEX.is_file():
+        return (f"ERR: no BM25 index at {BM25_INDEX}. Run `bash bin/setup-retrieve.sh` "
+                "to provision, or fall back to wiki-resolve.py + rg + wiki-excerpt.py. "
+                "Do not Read wiki/index.md.")
+    if not CHUNKS_DIR.is_dir() or not any(CHUNKS_DIR.iterdir()):
+        return (f"ERR: no chunks at {CHUNKS_DIR}. Run "
+                "`python3 scripts/contextual-prefix.py --all` first.")
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Hybrid retrieval over the vault.")
     parser.add_argument("query", help="Natural-language query")
@@ -242,120 +412,17 @@ def main():
                         help="Let the graph channel add person / organization entities too")
     args = parser.parse_args()
 
-    if not BM25_INDEX.is_file():
-        log(f"ERR: no BM25 index at {BM25_INDEX}. Run `bash bin/setup-retrieve.sh` "
-            "to provision, or fall back to wiki-resolve.py + rg + wiki-excerpt.py. "
-            "Do not Read wiki/index.md.")
-        return EXIT_NOT_PROVISIONED
-    if not CHUNKS_DIR.is_dir() or not any(CHUNKS_DIR.iterdir()):
-        log(f"ERR: no chunks at {CHUNKS_DIR}. Run "
-            "`python3 scripts/contextual-prefix.py --all` first.")
+    problem = provisioned()
+    if problem:
+        log(problem)
         return EXIT_NOT_PROVISIONED
 
-    bm25 = import_sibling("bm25_index", "bm25-index.py")
-    reranker = import_sibling("rerank", "rerank.py")
-    bm25_index = bm25.load_index()
-
-    bm25_hits = bm25.query(args.query, top_k=args.bm25_top, index=bm25_index)
-    log(f"bm25: {len(bm25_hits)} hits")
-
-    candidates = []
-    for h in bm25_hits:
-        chunk_path = VAULT_ROOT / h["path"]
-        try:
-            chunk = json.loads(chunk_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        candidates.append({
-            "chunk_id": h["chunk_id"],
-            "page_address": chunk.get("page_address"),
-            "page_path": chunk.get("page_path"),
-            "absolute_path": str((VAULT_ROOT / chunk.get("page_path", "")).resolve()),
-            "chunk_index": chunk.get("chunk_index"),
-            "bm25_score": h["score"],
-            "path": h["path"],
-            "snippet": chunk_snippet(chunk),
-        })
-
-    graph_info = {"active": False}
-    if not args.no_graph and GRAPH_JSON.is_file() and candidates:
-        graph_mod = import_sibling("wiki_graph", "wiki-graph.py")
-        graph = graph_mod.load_graph(GRAPH_JSON)
-        if graph and not graph_mod.graph_is_empty(graph):
-            prefix_mod = import_sibling("contextual_prefix", "contextual-prefix.py")
-
-            def address_of(page):
-                node = graph["nodes"].get(page) or {}
-                if node.get("address"):
-                    return node["address"]
-                try:
-                    return prefix_mod.derive_synthetic_address(VAULT_ROOT / page)
-                except (ValueError, AttributeError):
-                    return None
-
-            added, boosted, via_by_page = graph_channel(
-                graph_mod, graph, candidates, args.graph_seeds, args.graph_hops, args.graph_top, address_of,
-                skip_subtypes=frozenset() if args.graph_people else SKIP_SUBTYPES,
-                bm25_mod=bm25, index=bm25_index, query_text=args.query,
-            )
-            for c in candidates:
-                page = c.get("page_path")
-                if page in boosted and via_by_page.get(page):
-                    c["via"] = via_by_page[page]
-            via_count = sum(len(c.get("via") or []) for c in added)
-            via_count += sum(len(c.get("via") or []) for c in candidates if c.get("page_path") in boosted)
-            graph_info = {
-                "active": True,
-                "seeds": min(args.graph_seeds, len({c["page_path"] for c in candidates})),
-                "added": [c["page_path"] for c in added],
-                "boosted": sorted(boosted, key=lambda p: -boosted[p]),
-                "via_count": via_count,
-            }
-            if added or boosted:
-                candidates = rrf_fuse(candidates, added, boosted)
-                log(f"graph: +{len(added)} page(s), {len(boosted)} boosted")
-
-    if args.no_rerank:
-        final = candidates[:args.top]
-        strategy = "bm25-only"
-        for c in final:
-            c["rerank_score"] = c["bm25_score"]
-            c["rerank_source"] = "skipped"
-    else:
-        final = reranker.rerank(
-            args.query, candidates, top_k=args.top,
-            allow_remote=args.allow_remote_ollama,
-        )
-        # Derive strategy from first candidate's rerank_source
-        first_src = (final[0].get("rerank_source") if final else "unknown")
-        strategy = f"bm25+rerank:{first_src}"
-    if graph_info["active"] and (graph_info["added"] or graph_info["boosted"]):
-        strategy += "+graph"
-
-    # Dedupe by page (we may have multiple chunks of the same page; collapse to best)
-    by_page = {}
-    for c in final:
-        addr = c.get("page_address")
-        if addr not in by_page or c.get("rerank_score", 0) > by_page[addr].get("rerank_score", 0):
-            by_page[addr] = c
-    deduped = list(by_page.values())
-    deduped.sort(key=lambda c: c.get("rerank_score", 0), reverse=True)
-
-    out = {
-        "query": args.query,
-        "strategy": strategy,
-        "top_k": args.top,
-        "candidates": deduped[:args.top],
-    }
-    if args.explain:
-        out["explain"] = {
-            "bm25_candidate_count": len(bm25_hits),
-            "post_rerank_count": len(final),
-            "deduped_count": len(deduped),
-            "bm25_top_param": args.bm25_top,
-            "graph": graph_info,
-        }
-
+    out = Searcher().search(
+        args.query, top=args.top, bm25_top=args.bm25_top, no_rerank=args.no_rerank,
+        explain=args.explain, allow_remote_ollama=args.allow_remote_ollama,
+        no_graph=args.no_graph, graph_top=args.graph_top, graph_seeds=args.graph_seeds,
+        graph_hops=args.graph_hops, graph_people=args.graph_people,
+    )
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return EXIT_OK
 

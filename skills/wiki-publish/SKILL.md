@@ -43,6 +43,8 @@ wiki 側は**一切変更しない**（非破壊）。出力は `notes/` への�
 https://sre.google/sre-book/postmortem-culture/
 ```
 
+- 論文の項目は、source ページに `doi:` があるものを `python3 scripts/bib-lookup.py meta <DOI>`(Crossref)で引き、会場名・巻・号・ページ・年を正式な値に揃える。取れた欄だけを書き、取れない欄は source ページが言う範囲に留める(推測で埋めない)。URL は `https://doi.org/<DOI>` にできる。終了 4・5 は従来どおり source ページの記載だけで書く。
+- 参考文献に載せる論文が撤回されていないか、保存前に `bib-lookup.py retracted` の出力で `RETRACTED` 行に該当しないことを確かめる(該当したら清書を止めてユーザーに知らせる)。
 - wiki 内部対応表（ソースマッピング等）の付録は**削除**する。外部読者には意味がない。
 
 ### 4. 保存と検証

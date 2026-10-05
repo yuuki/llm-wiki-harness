@@ -18,6 +18,7 @@
   - 台帳と名寄せ: `concept-candidates.py` / `concept-resolve.py` / `paper-ids.py` / `paper-refs.py` / `entity-resolve.py` / `wiki-manifest.py`
   - サーベイ: `wiki-survey-recommend.py` / `wiki-survey-check.py`
   - 点検: `wiki-doctor.py` / `address-backfill.py`、関心の要約: `wiki-profile.py`
+  - 外側の書誌照会: `bib-lookup.py`（OpenAlex / Crossref。撤回・出版社版の書誌・橋渡し文献・母集団の厚み）
 - 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
 - 読み取り専用の Obsidian プラグイン `wiki-lens`
 
@@ -189,6 +190,7 @@ python3 scripts/test_recompile_finalize.py
 python3 scripts/test_crop_paper_figures.py
 python3 scripts/test_wiki_survey_check.py
 python3 scripts/test_wiki_survey_recommend.py
+python3 scripts/test_bib_lookup.py
 ```
 
 `test_wiki_related.py` の 1 件は `templates/wiki-CLAUDE.md` を読むので、このリポジトリのルートで走らせる。`test_contact_sheet.py` と `test-paper-image-extraction.sh` は、それぞれ `uv` と pdf.js が入った環境で走らせる。

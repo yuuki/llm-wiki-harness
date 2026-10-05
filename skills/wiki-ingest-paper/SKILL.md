@@ -43,6 +43,7 @@ description: "Paper-specialized wiki ingest. Downloads the paper PDF into `.raw/
 - subagent 1体につき論文1本。各 subagent が Step 0(PDF取得)〜Step 3.5(文献候補) までを担当し、wiki ページ書き込みは `wiki-page-write.py`(新規)/ `wiki-append.py`(既存)を通す(ロックはヘルパーの内側)。**論文 1 本は読み手と書き手に分離しない**(本文が短く、分離の固定費のほうが大きい)。1 体が読んで書く。
 - 共有ファイル(`wiki/index.md`・各 `_index.md`・`hot.md`・`log.md`・`overview.md`・`.raw/.manifest.json`)は subagent からは触らない。オーケストレータが全 subagent 完了後に `wiki-catalog.py`(prepend-log / prepend-hot / prepend-changelog / add-catalog-line / prepend-master)で一括更新する(カタログファイルを Read/Edit しない)。各 subagent は `wiki-page-write.py` 経由で自分の新規ページ分を採番してよい(直列化不要)。`scripts/allocate-address.sh` は直接実行しない(ヘルパー外の採番は失敗する)。同じ人物・組織の entity は書き込み直前に resolve し、既存なら append。衝突したらマージ復旧せず止める。
 - PDF ダウンロードと PyMuPDF/画像処理は重い。同時実行は 3〜4 体までに抑える
+- ACM / IEEE の論文は、オーケストレータが subagent 起動前に `fetch-paper-pdf.sh` を通し、終了コード 5 のものをブラウザ経路で直列に取得しておく([`references/publisher-browser-fetch.md`](references/publisher-browser-fetch.md))。subagent にはローカルパスと `FETCH_ORIGIN_REF` を渡し、ブラウザを操作させない
 - log エントリは論文ごとに1つずつ(`## [YYYY-MM-DD] ingest-paper | タイトル`)、commit は最後に1回
 - **subagent の個別プロンプトにはフル SKILL を渡さない。** [`references/subagent-brief.md`](references/subagent-brief.md) を briefing に含めるか、そこに書いてある手順だけを渡す。
 
@@ -97,11 +98,26 @@ bash scripts/fetch-paper-pdf.sh "https://arxiv.org/abs/2501.01234"
 
 PDF ダウンロードは外部への egress を伴う。サンドボックス下では `arxiv.org` 等が許可ホストに無く**接続拒否で失敗する**ことがある。その場合はヘルパーをサンドボックス無効化で再実行する(ユーザーに許可を求めるプロンプトが出る)。`WebFetch` は処理済みテキストしか返さず PDF バイナリを取れないため、原本取得は `curl`(= ヘルパー)で行う。
 
+### ACM / IEEE(終了コード 5 → ブラウザ経路)
+
+ACM DL(`dl.acm.org`・DOI `10.1145/`)と IEEE Xplore(`ieeexplore.ieee.org`・DOI `10.1109/`)は、ヘルパーが PDF エンドポイントを解決して curl を 1 回試す。ACM は Cloudflare で、IEEE の購読論文はログイン要求で弾かれ、ヘルパーは**終了コード 5** と `browser_fetch=` / `browser_pdf_path=` / `slug=` / `origin_ref=` を返す。そのときは [`references/publisher-browser-fetch.md`](references/publisher-browser-fetch.md) に従い、Claude in Chrome 拡張を入れた **Dia** で PDF を `~/Downloads` に落としてから `FETCH_ORIGIN_REF=<origin_ref> bash scripts/fetch-paper-pdf.sh ~/Downloads/<保存名> <slug>` で取り込む。ACM は `browser_download=`(`?download=true`)への遷移、IEEE はページ内 `fetch` で保存する。ダウンロード前に利用者の承認を取る。IEEE の購読論文は利用者の購読アカウントでログインしてもらい、パスワードを自分で入力しない。内蔵ブラウザと Computer Use は PDF を保存できないので使わない。
+
+### VLDB(PVLDB・DOI `10.14778/`)
+
+PVLDB の論文は ACM DL にも載るが、ACM 経路(`?download=true`)では PDF が保存されない(確認した範囲では保存されず、ヘルパーも何も返さない)。**`www.vldb.org` が公開している PDF を curl で取る。** ブラウザもログインも要らない。
+
+- DOI `10.14778/<a>.<b>` の巻は **発行年 − 2007**(2022 = vol15、2024 = vol17)。巻の一覧 `https://www.vldb.org/pvldb/vol<N>/` には全論文の JSON が埋め込まれていて、`"pdf":"https://www.vldb.org/pvldb/vol<N>/p<開始ページ>-<第一著者の姓>.pdf` と `"title"` が並ぶ。題名で `curl -sL` した HTML を検索し、直前の `"pdf"` を取る。題名が近い別論文を掴まないよう、隣の項目ではなく同じ項目の `pdf` であることを確かめる。
+- 取り込みは、見つけた URL をそのままヘルパーに渡す: `FETCH_ORIGIN_REF="https://doi.org/<doi>" bash scripts/fetch-paper-pdf.sh "https://www.vldb.org/pvldb/vol<N>/p<…>.pdf" "acm-<DOI の後半>"`(slug は ACM 経路と揃える。同じ論文を別 slug で二重に置かない)。サンドボックス下では `www.vldb.org` と `doi.org` を許可ホストに足す。
+- `www.vldb.org` は ACM のような終了コード 5 を返さないので、ブラウザ経路は使わない。PVLDB 以外の 10.14778(VLDB Journal は Springer の `10.1007/`)とは別物。
+
 ### メタデータと abstract の取得
 
 PDF 本文だけでは書誌情報が不足しがちなので、補完する:
 - **arXiv**: `arxiv_html`(`https://arxiv.org/html/<id>`)を `WebFetch` で取得すると、タイトル・著者・所属・abstract・本文・図表キャプションが構造化テキストで得やすい(arXiv は PDF/abs に軽いアクセス制限があるため HTML 版を優先)。HTML 版が無い古い論文は abs ページ(`/abs/<id>`)を `WebFetch`。
-- **出版社版(IEEE/ACM/USENIX 等)**: `url` は実在するものだけを `WebFetch` で確認して採用。無ければ空。
+- **出版社版(IEEE/ACM/USENIX 等)**: DOI が分かるなら先に `python3 scripts/bib-lookup.py meta <DOI>` を引く(Crossref。題・年・会場・巻号頁・abstract が JSON で返る。ACM のページは Cloudflare で `WebFetch` が弾かれるので、書誌はこちらで取る)。abstract は raw の本文と突き合わせて使い、食い違えば raw を正とする。`url` は実在するものだけを `WebFetch` で確認して採用。無ければ空。
+- **arXiv 版と出版社版の対応**: 出版社版の DOI から `python3 scripts/bib-lookup.py pair <DOI>` を引くと arXiv ID が分かる(OpenAlex。arXiv 側から出版社版は引けない)。既存 source が arXiv だけ持つとき `doi:` を足す根拠になる。
+- 著者所属は PDF の表記を正とする。OpenAlex の `authorships` は表記ゆれ(ROR・国)の確認にだけ使う。
+- 終了 4(無料枠切れ)・5(通信失敗)なら、この節の従来手順(arXiv HTML・`WebFetch`)に戻る。
 - **abstract は完全な日本語訳**を一文ずつ忠実に作る(常体)。原文を勝手に要約・補完しない。
 - **置き場所は `> [!abstract] 概要` callout に固定する。** raw(PDF / `.txt` / abs・HTML)に載っている Abstract は、source 本文の先頭をこの Obsidian callout にする。タイトル行は `概要` のみ(「(arXiv abstract の日本語訳)」などの括弧書きは付けない)。`## Abstract` 見出しにも、下の `## 概要` 節にも置かない。`## 概要` は wiki 側の 2-3 文要約であり、論文 Abstract の再掲ではない。
 

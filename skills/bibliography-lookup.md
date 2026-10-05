@@ -21,7 +21,20 @@
 | Semantic Scholar メールの URL | メール本文の題名と、リンク先の arXiv / DOI | 上のいずれかに落とす | 落とした先の経路と同じ |
 | 会議の採択リスト | 会議名を会場として採用 | 題名で DBLP / arXiv | 会場は採択リストから。題・識別子は DBLP / arXiv |
 
-OpenAlex は使わない(鍵が必須で、検索は従量課金である)。
+OpenAlex は**補助経路**として使える(キー無しでは 1 日に少額の無料枠があり、単発の `/works/doi:` は無料、フィルタと `search=` は従量で数える)。呼び出しは `scripts/bib-lookup.py` に集約してあり、残額をヘッダで見て尽きたら終了コード 4 で止まる。4 が返ったら arXiv / Crossref へ退避し、続行しない。料金体系は変わりうるので、4 以外の理由で 402 / 429 が続くなら使うのをやめる。サンドボックスでは `api.openalex.org` と `api.crossref.org` を許可ホストに足す。
+
+| 用途 | コマンド | 備考 |
+|---|---|---|
+| 撤回照会(wiki-lint 19) | `bib-lookup.py retracted` | `wiki/sources/` の `doi:` を 50 件ずつ |
+| 出版社版の書誌(題・年・会場・巻号頁・abstract・訂正) | `bib-lookup.py meta DOI` | Crossref。ACM は abstract が取れる。`relation` は空のことが多い |
+| 出版社版 DOI → arXiv 版 | `bib-lookup.py pair DOI` | 一方向のみ。arXiv DOI で直接引くと 404 |
+| 橋渡し文献(両側を引く論文) | `bib-lookup.py cites-both ID ID` | `cites:` の AND。ID は DOI か `W...` |
+| 参考文献表(DOI 付きの割合) | `bib-lookup.py refs DOI` | Crossref。DOI が付かない項目も多い |
+| abstract の一括取得 | `bib-lookup.py abstracts DOI...` | OpenAlex。索引済みの論文向け。採択直後は未登録が多い |
+| 母集団の厚み(年ごとの件数) | `bib-lookup.py population QUERY` | `group_by`。`has_abstract` の集計は当てにならない |
+| 題名・語での検索 | `bib-lookup.py search QUERY` | arXiv に無い論文誌・会議論文も拾う |
+
+被引用数は、ここでも正典性の根拠にしない。
 
 ## パーセントエンコード
 
@@ -71,5 +84,5 @@ DBLP の応答が JSON でない(ボット判定の HTML を 200 で返す)と�
 ## 使わないもの
 
 - Semantic Scholar Graph API(キー無しは 429、キー失効は 403)
-- OpenAlex を主経路にすること
+- OpenAlex を唯一の経路にすること(無料枠が尽きる。arXiv / Crossref に退避できる形で使う)
 - 訓練データの記憶だけで識別子や年を埋めること

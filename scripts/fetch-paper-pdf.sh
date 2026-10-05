@@ -11,6 +11,14 @@
 # 入力の解決規則:
 #   - https://arxiv.org/abs/<id> / .../pdf/<id> / 裸の <id>(例 2501.01234, 2501.01234v2)
 #       -> https://arxiv.org/pdf/<id>.pdf からダウンロード。arxiv_html ヒントも併せて出力。
+#   - ACM(dl.acm.org/doi/... / doi.org/10.1145/... / 裸の 10.1145/...)
+#       -> https://dl.acm.org/doi/pdf/<doi> を curl で試す。slug は acm-<doi の後半>。
+#   - IEEE(ieeexplore.ieee.org/document/<n> / stamp の arnumber=<n> / doi.org/10.1109/...)
+#       -> https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber=<n> を curl で試す。
+#          DOI は doi.org のリダイレクト先から arnumber を引く。slug は ieee-<arnumber>。
+#     ACM / IEEE は curl を Cloudflare(403)やログイン要求(418/HTML)で弾くのが普通である。
+#     PDF が取れなければ終了コード 5 で browser_fetch= 等を出し、ブラウザ経路へ引き継ぐ
+#     (.claude/skills/wiki-ingest-paper/references/publisher-browser-fetch.md)。
 #   - その他の https URL                -> そのままダウンロード(.pdf でなくても可)。
 #   - ローカル .pdf パス                 -> .raw/papers/ にコピー。
 #
@@ -33,6 +41,16 @@
 #
 # 環境変数:
 #   FETCH_FAIL_IF_EXISTS=1  既存 source ページに一致したらダウンロード前に失敗(終了コード 4)
+#   FETCH_ORIGIN_REF=<ref>  ローカル PDF の出自(DOI / doi.org URL / 出版社 URL)。ブラウザで落とした
+#                           PDF を渡すときに付けると、既存 source の照合をこの ref で行う
+#
+# 終了コード:
+#   0 成功 / 1 失敗 / 4 FETCH_FAIL_IF_EXISTS で一致 /
+#   5 ACM・IEEE で curl が PDF を取れなかった。stdout に次を出すのでブラウザ経路へ回す:
+#       browser_fetch=<出版社の論文ページ URL>   # ブラウザで開くページ(同一オリジン)
+#       browser_pdf_path=<そのオリジン上の PDF パス>  # ページ内 fetch に渡す相対パス
+#       browser_download=<遷移するだけで保存が始まる URL または空>  # ACM の ?download=true
+#       publisher=acm|ieee  slug=<推奨 slug>  origin_ref=<FETCH_ORIGIN_REF に渡す値>
 #
 # 注意:
 #   - ネットワーク取得を伴う。サンドボックス下では arxiv.org 等への接続が拒否されることがある。
@@ -56,6 +74,12 @@ mkdir -p "$DEST_DIR"
 
 ARXIV_ID=""
 ARXIV_HTML=""
+PUBLISHER=""
+BROWSER_PAGE=""
+BROWSER_PDF_PATH=""
+BROWSER_DOWNLOAD=""
+ORIGIN_REF=""
+PUB_SLUG=""
 YEAR_HINT=""
 SRC_URL=""
 LOCAL_PATH=""
@@ -84,6 +108,30 @@ elif printf '%s' "$INPUT" | grep -qiE 'arxiv\.org' || printf '%s' "$INPUT" | gre
   case "$YY" in
     [0-9][0-9]) YEAR_HINT="20${YY}" ;;
   esac
+elif ACM_DOI="$(printf '%s' "$INPUT" | grep -oiE '10\.1145/[^?#[:space:]]+' | head -n1)" && [ -n "$ACM_DOI" ]; then
+  PUBLISHER="acm"
+  ACM_DOI="${ACM_DOI%/}"
+  SRC_URL="https://dl.acm.org/doi/pdf/${ACM_DOI}"
+  BROWSER_PAGE="https://dl.acm.org/doi/${ACM_DOI}"
+  BROWSER_PDF_PATH="/doi/pdf/${ACM_DOI}"
+  BROWSER_DOWNLOAD="https://dl.acm.org/doi/pdf/${ACM_DOI}?download=true"
+  ORIGIN_REF="https://doi.org/${ACM_DOI}"
+  PUB_SLUG="acm-${ACM_DOI#10.1145/}"
+elif printf '%s' "$INPUT" | grep -qiE 'ieeexplore\.ieee\.org|10\.1109/'; then
+  PUBLISHER="ieee"
+  ARNUMBER="$(printf '%s' "$INPUT" | grep -oE '(document/|arnumber=)[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)"
+  IEEE_DOI="$(printf '%s' "$INPUT" | grep -oiE '10\.1109/[^?#[:space:]]+' | head -n1 || true)"
+  if [ -z "$ARNUMBER" ] && [ -n "$IEEE_DOI" ] && command -v curl >/dev/null 2>&1; then
+    # doi.org は IEEE の document URL へリダイレクトする。追従せず Location だけ読む
+    loc="$(curl -sSI -m 20 "https://doi.org/${IEEE_DOI}" 2>/dev/null | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r' | head -n1)"
+    ARNUMBER="$(printf '%s' "$loc" | grep -oE 'document/[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)"
+  fi
+  [ -n "$ARNUMBER" ] || die "IEEE の arnumber を解決できなかった(document URL を渡すか、サンドボックス無効化で doi.org を引く): $INPUT"
+  SRC_URL="https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber=${ARNUMBER}&ref="
+  BROWSER_PAGE="https://ieeexplore.ieee.org/document/${ARNUMBER}"
+  BROWSER_PDF_PATH="/stampPDF/getPDF.jsp?tp=&arnumber=${ARNUMBER}&ref="
+  if [ -n "$IEEE_DOI" ]; then ORIGIN_REF="https://doi.org/${IEEE_DOI}"; else ORIGIN_REF="$BROWSER_PAGE"; fi
+  PUB_SLUG="ieee-${ARNUMBER}"
 elif printf '%s' "$INPUT" | grep -qiE '^https?://'; then
   SRC_URL="$INPUT"
 else
@@ -95,6 +143,8 @@ if [ -n "$SLUG_ARG" ]; then
   SLUG="$(sanitize_slug "$SLUG_ARG")"
 elif [ -n "$ARXIV_ID" ]; then
   SLUG="arxiv-$(sanitize_slug "$ARXIV_ID")"
+elif [ -n "$PUB_SLUG" ]; then
+  SLUG="$(sanitize_slug "$PUB_SLUG")"
 elif [ -n "$LOCAL_PATH" ]; then
   SLUG="$(sanitize_slug "$(basename "${LOCAL_PATH%.pdf}")")"
 else
@@ -111,7 +161,8 @@ fi
 EXISTING_SOURCES=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/paper-ids.py" ] && command -v python3 >/dev/null 2>&1; then
-  REF="${ARXIV_ID:-${SRC_URL:-}}"
+  # 出版社 URL は PDF エンドポイントより DOI のほうが索引に当たる。ローカル PDF は出自が渡されたときだけ
+  REF="${ARXIV_ID:-${ORIGIN_REF:-${FETCH_ORIGIN_REF:-${SRC_URL:-}}}}"
   if [ -n "$REF" ]; then
     EXISTING_SOURCES="$(python3 "$SCRIPT_DIR/paper-ids.py" check "$REF" --compact 2>/dev/null \
       | awk -F'\t' 'NR==1 { print $5 }' || true)"
@@ -134,6 +185,26 @@ trap 'rm -f "$WORK_PDF"' EXIT
 # --- 取得 -------------------------------------------------------------------
 if [ -n "$LOCAL_PATH" ]; then
   cp -f "$LOCAL_PATH" "$WORK_PDF"
+elif [ -n "$PUBLISHER" ]; then
+  # ACM / IEEE は curl を弾くのが普通。リトライせず 1 回だけ試し、だめならブラウザ経路へ回す
+  command -v curl >/dev/null 2>&1 || die "curl が見つからない"
+  curl -fsSL -m 60 -A "Mozilla/5.0 (compatible; wiki-ingest-paper/1.0)" \
+    -o "$WORK_PDF" "$SRC_URL" 2>/dev/null || : > "$WORK_PDF"
+  case "$(head -c 5 "$WORK_PDF" 2>/dev/null || true)" in
+    %PDF*) : ;;
+    *)
+      err "info: ${PUBLISHER} は curl で PDF を返さなかった(Cloudflare / ログイン要求)。ブラウザ経路で取得する"
+      err "      手順: .claude/skills/wiki-ingest-paper/references/publisher-browser-fetch.md"
+      printf 'browser_fetch=%s\n'    "$BROWSER_PAGE"
+      printf 'browser_pdf_path=%s\n' "$BROWSER_PDF_PATH"
+      printf 'browser_download=%s\n' "$BROWSER_DOWNLOAD"
+      printf 'publisher=%s\n'        "$PUBLISHER"
+      printf 'slug=%s\n'             "$SLUG"
+      printf 'origin_ref=%s\n'       "$ORIGIN_REF"
+      printf 'existing_sources=%s\n' "$EXISTING_SOURCES"
+      exit 5
+      ;;
+  esac
 else
   command -v curl >/dev/null 2>&1 || die "curl が見つからない"
   # arXiv は UA 無しだと弾くことがある。リダイレクト追従・リトライ付き。

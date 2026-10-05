@@ -16,6 +16,7 @@ hot 窓の超過、一時ファイルの残骸。本スクリプトはそれら�
   retrieve_provisioned  BM25 索引と chunks がある
   bm25_schema           索引の分かちが現行(和文 2-gram)か
   bm25_freshness        索引の updated_at より新しい wiki ページの数
+  bm25_sqlite           BM25 の SQLite 鏡像(retrieve.py が読む)が JSON と同じ版か
   stale_chunks          page_path が存在しない chunk(移動・削除の残骸)と知識ページ以外の chunk
   unchunked_pages       chunk が無い wiki ページ(新規・未 refresh)
   derived_caches        graph.json / paper-ids.json / contradictions.json / clusters.json の鮮度
@@ -38,6 +39,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import socket
 import subprocess
 import sys
@@ -173,6 +175,31 @@ def check_bm25_freshness(r, ctx):
                "python3 scripts/wiki-retrieve-refresh.py --all(変更頁だけ再チャンクする)")
     else:
         r.ok("bm25_freshness", f"索引は最新({age_h:.1f} 時間前)")
+
+
+def check_bm25_sqlite(r, ctx):
+    idx = META / "bm25" / "index.json"
+    mirror = META / "bm25" / "index.sqlite"
+    if not idx.is_file():
+        return
+    fix = "python3 scripts/bm25-index.py sqlite"
+    if not mirror.is_file():
+        r.warn("bm25_sqlite", "SQLite 鏡像が無い(retrieve.py が数 GB の JSON を読む)", fix)
+        return
+    try:
+        with idx.open("r", encoding="utf-8") as fh:
+            m = re.search(r'"updated_at":\s*"([^"]+)"', fh.read(1024))
+        con = sqlite3.connect(f"file:{mirror}?mode=ro", uri=True)
+        row = con.execute("SELECT value FROM meta WHERE key = 'updated_at'").fetchone()
+        con.close()
+    except (OSError, sqlite3.Error) as e:
+        r.warn("bm25_sqlite", f"SQLite 鏡像を読めない: {e}", fix)
+        return
+    mirror_at = json.loads(row[0]) if row else None
+    if m and mirror_at != m.group(1):
+        r.warn("bm25_sqlite", f"SQLite 鏡像が古い({mirror_at} ≠ JSON {m.group(1)})", fix)
+    else:
+        r.ok("bm25_sqlite", f"JSON と同じ版({mirror_at})")
 
 
 def is_knowledge_rel(rel_path):
@@ -499,6 +526,7 @@ CHECKS = [
     ("retrieve_provisioned", check_retrieve_provisioned),
     ("bm25_schema", check_bm25_schema),
     ("bm25_freshness", check_bm25_freshness),
+    ("bm25_sqlite", check_bm25_sqlite),
     ("stale_chunks", check_stale_chunks),
     ("unchunked_pages", check_unchunked_pages),
     ("derived_caches", check_derived_caches),

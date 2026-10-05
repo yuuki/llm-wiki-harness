@@ -53,7 +53,9 @@ For each **real-gap**, recommend literature in priority order:
 
 Verify every Tier 1 recommendation before it enters the report. Follow [`.claude/skills/bibliography-lookup.md`](../bibliography-lookup.md): identifier-first, arXiv / DBLP / Crossref. **Do not use the Semantic Scholar Graph API.** **Privacy rule: queries may contain only concept names and candidate paper titles — never note contents, vault paths, or anything from `z99_private/`.**
 
-Confirm exact title, year, venue, and DOI or arXiv id. Treat venue (and whether the item is a survey) as canonicity evidence; do not use citation counts. A landing page (`arxiv.org/abs/…` or `doi.org/…`) is enough for a handful of items. If a host is blocked, surface the permission prompt instead of working around it. A recommendation that cannot be verified stays in the report but keeps the **未検証** label — never fabricate identifiers.
+**Structural bridge search (OpenAlex).** When a gap's two sides each have an anchor paper with a DOI in the wiki (a source page with `doi:`), ask for papers that cite *both*: `python3 scripts/bib-lookup.py cites-both <DOI-A> <DOI-B>`. A hit is a Tier 1 candidate backed by a real citation edge, not memory; verify it like any other. 0 hits means no direct bridge, not that no bridge exists. Use DBLP only when it returns JSON; `bib-lookup.py search "<concept A> <concept B>"` covers venues that arXiv misses. Exit 4 means the free budget is gone: fall back to arXiv / Crossref.
+
+Confirm exact title, year, venue, and DOI or arXiv id. `bib-lookup.py meta <DOI>` returns Crossref's title, year, venue, volume and pages in one call. Treat venue (and whether the item is a survey) as canonicity evidence; do not use citation counts. A landing page (`arxiv.org/abs/…` or `doi.org/…`) is enough for a handful of items. If a host is blocked, surface the permission prompt instead of working around it. A recommendation that cannot be verified stays in the report but keeps the **未検証** label — never fabricate identifiers.
 
 ## Step 5 — Report
 

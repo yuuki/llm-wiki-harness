@@ -58,17 +58,23 @@ def run(cmd, timeout=180):
         return None
 
 
-def retrieve_pages(goal, top):
-    """retrieve.py をページ単位に畳んだ [(page_path, score_info)] を順序つきで返す。"""
-    proc = run([sys.executable, str(_SCRIPTS / "retrieve.py"), goal, "--top", str(top)])
-    if proc is None or proc.returncode != 0:
-        if proc is not None:
-            log(f"WARN: retrieve.py exit {proc.returncode}; --pages だけで束を作る")
-        return [], None
-    try:
-        data = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return [], None
+def retrieve_pages(goal, top, searcher=None):
+    """retrieve.py をページ単位に畳んだ [(page_path, score_info)] を順序つきで返す。
+
+    searcher(retrieve.Searcher)を渡すとプロセス内で検索する(常駐する索引を持つ呼び出し側向け)。
+    """
+    if searcher is not None:
+        data = searcher.search(goal, top=top)
+    else:
+        proc = run([sys.executable, str(_SCRIPTS / "retrieve.py"), goal, "--top", str(top)])
+        if proc is None or proc.returncode != 0:
+            if proc is not None:
+                log(f"WARN: retrieve.py exit {proc.returncode}; --pages だけで束を作る")
+            return [], None
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            return [], None
     seen, out = set(), []
     for c in data.get("candidates", []):
         p = c.get("page_path")
@@ -177,6 +183,31 @@ def norm_page(p):
     return p if p.endswith(".md") else p + ".md"
 
 
+def pack(goal, budget=6000, top=10, per_page=1200, pages=(), exclude=(), no_retrieve=False,
+         searcher=None):
+    """束を作って (text, summary) を返す。候補ページが無ければ (None, None)。"""
+    pinned = [(norm_page(p), {"channels": ["pinned"], "address": None}) for p in pages]
+    excluded = {norm_page(p) for p in exclude}
+    retrieved, strategy = ([], None) if no_retrieve else retrieve_pages(goal, top, searcher)
+    seen = set()
+    picked = []
+    for p, info in pinned + retrieved:
+        if p in seen or p in excluded:
+            continue
+        if not (VAULT_ROOT / p).is_file():
+            moved = resolve_moved(p)
+            if moved is None:
+                log(f"WARN: not found: {p}")
+                continue
+            log(f"note: {p} は無い。{moved} を使う(索引が古い。wiki-retrieve-refresh.py で更新)")
+            p = moved
+        seen.add(p)
+        picked.append((p, info))
+    if not picked:
+        return None, None
+    return build(goal, picked, budget, per_page, strategy)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="引用付き・予算内・省略明示のコンテキスト束。")
     parser.add_argument("goal")
@@ -193,28 +224,11 @@ def main(argv=None):
         log("ERR: --budget-tokens は 500 以上、--per-page は 100 以上")
         return EXIT_USAGE
 
-    pinned = [(norm_page(p), {"channels": ["pinned"], "address": None}) for p in args.pages]
-    exclude = {norm_page(p) for p in args.exclude}
-    retrieved, strategy = ([], None) if args.no_retrieve else retrieve_pages(args.goal, args.top)
-    seen = set()
-    pages = []
-    for p, info in pinned + retrieved:
-        if p in seen or p in exclude:
-            continue
-        if not (VAULT_ROOT / p).is_file():
-            moved = resolve_moved(p)
-            if moved is None:
-                log(f"WARN: not found: {p}")
-                continue
-            log(f"note: {p} は無い。{moved} を使う(索引が古い。wiki-retrieve-refresh.py で更新)")
-            p = moved
-        seen.add(p)
-        pages.append((p, info))
-    if not pages:
+    text, summary = pack(args.goal, args.budget_tokens, args.top, args.per_page,
+                         args.pages, args.exclude, args.no_retrieve)
+    if text is None:
         log("ERR: 候補ページが無い(retrieve 未整備なら --pages で指定する)")
         return EXIT_EMPTY
-
-    text, summary = build(args.goal, pages, args.budget_tokens, args.per_page, strategy)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         summary["out"] = args.out

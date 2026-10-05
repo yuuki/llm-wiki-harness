@@ -31,6 +31,15 @@ Index schema (.vault-meta/bm25/index.json):
 
 Chunk id format: "<page-address>:<chunk-index>" (e.g. "c-000042:3").
 
+SQLite mirror (.vault-meta/bm25/index.sqlite):
+  The JSON index is ~500 MB and parses to ~6 GB of Python objects. `build`
+  also writes the same index to SQLite (postings packed as uint32 pairs), and
+  `load_fast_index()` opens it read-only, keeping only the docs table in
+  memory and fetching postings per query term. Scores are identical.
+  `meta.updated_at` must equal the JSON's `updated_at`; otherwise the mirror is
+  stale and callers fall back to the JSON. `bm25-index.py sqlite` converts an
+  existing JSON index without re-tokenizing.
+
 Tokenization: NFKC + casefold. Latin (and other non-CJK \\w) words keep
 in-word apostrophes and hyphens. CJK runs become character bigrams; run
 edges are also unigrams. Adjacent digit↔CJK pairs emit a boundary bigram
@@ -44,6 +53,7 @@ Query interface (used by retrieve.py at query time):
 Build interface:
   bm25-index.py build               # full rebuild (always; incremental is v1.7.x scope)
   bm25-index.py stats               # print index stats
+  bm25-index.py sqlite              # (re)write the SQLite mirror from index.json
 
 Exit codes:
   0 — success
@@ -56,6 +66,9 @@ Exit codes:
 import argparse
 import fcntl
 import json
+import re
+import sqlite3
+from array import array
 import math
 import os
 import sys
@@ -74,6 +87,7 @@ META_DIR = VAULT_ROOT / ".vault-meta"
 CHUNKS_DIR = META_DIR / "chunks"
 BM25_DIR = META_DIR / "bm25"
 INDEX_PATH = BM25_DIR / "index.json"
+SQLITE_PATH = BM25_DIR / "index.sqlite"
 LOCK_PATH = META_DIR / ".bm25.lock"
 
 K1 = 1.5
@@ -192,6 +206,113 @@ def write_index(index):
             tmp.unlink(missing_ok=True)
 
 
+def write_sqlite(index):
+    """index(build_index / load_index の dict)を SQLite に写す。atomic に置き換える。"""
+    BM25_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SQLITE_PATH.with_suffix(f".{os.getpid()}.tmp")
+    tmp.unlink(missing_ok=True)
+    try:
+        con = sqlite3.connect(str(tmp))
+        con.executescript(
+            "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);"
+            "CREATE TABLE docs (id INTEGER PRIMARY KEY, cid TEXT, path TEXT, dl INTEGER);"
+            "CREATE TABLE vocab (term TEXT PRIMARY KEY, df INTEGER, postings BLOB) WITHOUT ROWID;"
+        )
+        meta = {k: index.get(k) for k in
+                ("schema_version", "tokenize", "params", "doc_count", "avg_dl", "updated_at")}
+        con.executemany("INSERT INTO meta VALUES (?, ?)",
+                        [(k, json.dumps(v)) for k, v in meta.items()])
+        ids = {}
+        rows = []
+        for i, (cid, d) in enumerate(index["docs"].items()):
+            ids[cid] = i
+            rows.append((i, cid, d["path"], d["dl"]))
+        con.executemany("INSERT INTO docs VALUES (?, ?, ?, ?)", rows)
+
+        def vrows():
+            for term, v in index["vocab"].items():
+                packed = array("I")
+                for cid, cnt in v["postings"]:
+                    packed.append(ids[cid])
+                    packed.append(cnt)
+                yield term, v["df"], packed.tobytes()
+
+        con.executemany("INSERT INTO vocab VALUES (?, ?, ?)", vrows())
+        con.commit()
+        con.close()
+        os.replace(tmp, SQLITE_PATH)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+class _SqliteVocab:
+    def __init__(self, con, cids):
+        self._con = con
+        self._cids = cids
+
+    def get(self, term, default=None):
+        row = self._con.execute("SELECT df, postings FROM vocab WHERE term = ?", (term,)).fetchone()
+        if not row:
+            return default
+        packed = array("I")
+        packed.frombytes(row[1])
+        cids = self._cids
+        return {"df": row[0],
+                "postings": [(cids[packed[i]], packed[i + 1]) for i in range(0, len(packed), 2)]}
+
+    def __len__(self):
+        return self._con.execute("SELECT count(*) FROM vocab").fetchone()[0]
+
+
+def json_updated_at():
+    """index.json 先頭の updated_at を全体を読まずに返す(build_index の鍵順に依存)。"""
+    try:
+        with INDEX_PATH.open("r", encoding="utf-8") as fh:
+            head = fh.read(1024)
+    except OSError:
+        return None
+    m = re.search(r'"updated_at":\s*"([^"]+)"', head)
+    return m.group(1) if m else None
+
+
+def load_sqlite_index():
+    """SQLite 鏡像を開いて load_index() と同じ形の dict を返す。無い・古いなら None。
+
+    vocab は語ごとに SQLite を引く遅延表、docs はメモリに載せる(数万件で数十 MB)。
+    鏡像は置き換え(os.replace)でしか更新しないので immutable で開く。
+    """
+    if not SQLITE_PATH.is_file():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{SQLITE_PATH}?mode=ro&immutable=1", uri=True,
+                              check_same_thread=False)
+        meta = {k: json.loads(v) for k, v in con.execute("SELECT key, value FROM meta")}
+        json_stamp = json_updated_at()
+        if json_stamp is not None and json_stamp != meta.get("updated_at"):
+            log("WARN: BM25 の SQLite 鏡像が index.json より古い。`bm25-index.py sqlite` で作り直す")
+            con.close()
+            return None
+        cids = []
+        docs = {}
+        for _id, cid, path, dl in con.execute("SELECT id, cid, path, dl FROM docs ORDER BY id"):
+            cids.append(cid)
+            docs[cid] = {"path": path, "dl": dl}
+    except sqlite3.Error as e:
+        log(f"WARN: BM25 の SQLite 鏡像を開けない: {e}")
+        return None
+    idx = dict(meta)
+    idx["docs"] = docs
+    idx["vocab"] = _SqliteVocab(con, cids)
+    idx["_sqlite"] = str(SQLITE_PATH)
+    return idx
+
+
+def load_fast_index():
+    """SQLite 鏡像が新しければそれを、無ければ JSON を読む。"""
+    return load_sqlite_index() or load_index()
+
+
 def load_index():
     if not INDEX_PATH.is_file():
         log(f"ERR: no index at {INDEX_PATH}. Run `bm25-index.py build` first.")
@@ -293,6 +414,7 @@ def main():
     sp_query.add_argument("--top", type=int, default=20, help="Top-K results")
 
     sub.add_parser("stats", help="Print index stats.")
+    sub.add_parser("sqlite", help="Write the SQLite mirror from the existing index.json.")
 
     args = parser.parse_args()
 
@@ -304,18 +426,28 @@ def main():
                 log("Nothing to index.")
                 return EXIT_OK
             write_index(index)
-            log(f"Wrote {INDEX_PATH}  docs={index['doc_count']}  vocab={len(index['vocab'])}  avg_dl={index['avg_dl']:.1f}")
+            write_sqlite(index)
+            log(f"Wrote {INDEX_PATH} (+ {SQLITE_PATH.name})  docs={index['doc_count']}  vocab={len(index['vocab'])}  avg_dl={index['avg_dl']:.1f}")
         finally:
             release_lock(fd)
         return EXIT_OK
 
     if args.cmd == "query":
-        results = query(args.text, top_k=args.top)
+        results = query(args.text, top_k=args.top, index=load_fast_index())
         print(json.dumps(results, indent=2))
         return EXIT_OK
 
     if args.cmd == "stats":
         stats()
+        return EXIT_OK
+
+    if args.cmd == "sqlite":
+        fd = acquire_lock()
+        try:
+            write_sqlite(load_index())
+            log(f"Wrote {SQLITE_PATH}")
+        finally:
+            release_lock(fd)
         return EXIT_OK
 
     return EXIT_USAGE

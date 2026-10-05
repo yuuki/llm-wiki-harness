@@ -128,6 +128,11 @@ rg -il "<鍵語>" research/ideas/ wiki/sources/ | head
 
 ```bash
 curl -sS -m 30 "https://export.arxiv.org/api/query?search_query=all:$(urlencode "<concept 名 A> <concept 名 B>")&max_results=10"
+# arXiv に無い論文誌・会議論文は OpenAlex で拾う(年・種別・会場つき)。検索語は同じく concept 名だけ。
+python3 scripts/bib-lookup.py search "<concept 名 A> <concept 名 B>" --limit 10
+# 両側のアンカー論文(DOI が分かるもの)を両方引く仕事は最も近い候補になる。
+python3 scripts/bib-lookup.py cites-both <DOI-A> <DOI-B>
+# 終了 4(無料枠切れ)・5(通信失敗)なら OpenAlex を捨て、arXiv / DBLP だけで進める。
 # DBLP は JSON が返ったときだけ使う。HTML(ボット判定)なら捨てて再試行しない。
 # 近い 1 本に arXiv ID があれば id_list で要旨と年を取る。DOI なら Crossref。
 ```

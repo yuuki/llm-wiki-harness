@@ -51,6 +51,8 @@ python3 scripts/wiki-survey-recommend.py
 
 `warnings` に `clusters_missing` があれば `python3 scripts/wiki-clusters.py build` を提案し、塊ラベル無しで続ける。`clusters_stale` は所属が古い印であり、所属は参考値にする。`profile_missing` なら関心判定を「不明」とし、対象外への切り捨てはしない。
 
+候補ごとに外側の母集団の厚みを知りたいときだけ、`python3 scripts/bib-lookup.py population "<concept 名>" --from-year <年>` で年ごとの件数を取る(OpenAlex。検索語は concept 名だけ。終了 4・5 なら省く)。件数は「外に十分ある / 薄い」の参考であり、ゲート(`n_documents`)の代わりにしない。訓練データで文献本数を足さない規則は変わらない。
+
 ゲートの正本は `n_documents` である。同じ本の章は 1 文書に畳む。`n_sources` はページ数であり、下限の判定に使わない。`dense` は文書が `gates.min_sources` 以上、`near` は `gates.near_min` 以上 `gates.min_sources` 未満である。`counts.ge_min` は `--min-sources` と同じ閾値の件数である。
 
 `survey_hits` は同一主題の既存長編(題・別名・対応/管理・監視/モニタリング)。`survey_near` は既存長編の `related` に載る近傍であり、同一教科書ではない。`cluster_id` / `cluster_label` / `on_backbone` は行に付いている。`profile_fit` は core / adjacent / out_of_scope / unknown である。

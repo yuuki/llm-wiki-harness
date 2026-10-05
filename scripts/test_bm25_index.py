@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bm25-index.py のロック待ちの回帰テスト。
+"""bm25-index.py のロック待ちと SQLite 鏡像の回帰テスト。
 
 WIKI_VAULT_ROOT に一時 vault を渡し、本物の wiki には触らない。
 """
@@ -69,6 +69,64 @@ class Bm25LockWaitTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("could not acquire bm25 lock", proc.stderr)
         self.assertGreaterEqual(elapsed, 1.0)
+
+
+class Bm25SqliteMirrorTest(unittest.TestCase):
+    """SQLite 鏡像が JSON と同じ点数を返し、古い鏡像は使われないこと。"""
+
+    TEXTS = [
+        "分散 トレーシング の サンプリング は tail latency を 見逃す",
+        "根本原因分析 の 評価 ベンチマーク と tail latency",
+        "KV キャッシュ の 圧縮 と 量子化",
+    ]
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.vault = Path(self._tmp.name)
+        for i, text in enumerate(self.TEXTS, 1):
+            d = self.vault / ".vault-meta" / "chunks" / f"c-00000{i}"
+            d.mkdir(parents=True)
+            for j in range(2):
+                (d / f"chunk-00{j}.json").write_text(json.dumps({
+                    "page_address": f"c-00000{i}", "chunk_index": j,
+                    "contextualized_text": text if j == 0 else text + " 補足",
+                }, ensure_ascii=False), encoding="utf-8")
+        env = os.environ.copy()
+        env["WIKI_VAULT_ROOT"] = str(self.vault)
+        proc = subprocess.run([sys.executable, str(SCRIPT), "build"],
+                              capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.mod = self.load_module()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def load_module(self):
+        import importlib.util
+        os.environ["WIKI_VAULT_ROOT"] = str(self.vault)
+        spec = importlib.util.spec_from_file_location("bm25_index_t", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_build_writes_mirror_with_identical_scores(self):
+        m = self.mod
+        self.assertTrue(m.SQLITE_PATH.is_file())
+        js, sq = m.load_index(), m.load_sqlite_index()
+        self.assertIsNotNone(sq)
+        for q in ("tail latency", "キャッシュ 圧縮", "根本原因分析", "存在しない語"):
+            self.assertEqual(m.query(q, 10, index=js), m.query(q, 10, index=sq), q)
+        self.assertEqual(m.best_chunk("補足", "c-000002", index=js),
+                         m.best_chunk("補足", "c-000002", index=sq))
+        self.assertEqual(len(js["vocab"]), len(sq["vocab"]))
+
+    def test_stale_mirror_falls_back_to_json(self):
+        m = self.mod
+        data = json.loads(m.INDEX_PATH.read_text(encoding="utf-8"))
+        data["updated_at"] = "2099-01-01T00:00:00Z"
+        m.INDEX_PATH.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertIsNone(m.load_sqlite_index())
+        self.assertNotIn("_sqlite", m.load_fast_index())
 
 
 if __name__ == "__main__":

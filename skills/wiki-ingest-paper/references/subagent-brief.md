@@ -26,6 +26,8 @@ cd <vault ルートの絶対パス> && ...
 bash scripts/fetch-paper-pdf.sh "<arxiv-url|id|pdf-url|local-pdf>"
 ```
 
+ACM / IEEE の PDF をブラウザで落とした論文は、オーケストレータがローカルパスと出自を渡す。そのときは `FETCH_ORIGIN_REF="<渡された origin_ref>" bash scripts/fetch-paper-pdf.sh "<ローカル PDF>" "<slug>"` と呼ぶ。fetch が終了コード 5(`browser_fetch=` を出力)を返したら、ブラウザを操作せずに止まり、`Deferred: browser fetch (<browser_fetch の値>)` と報告する。
+
 fetch が `page-*.png` の掃除まで行う。手で `find` / `python -c` しない。保持されるのは `image-*.png` と `images.json` だけ。`scripts/allocate-address.sh` は直接実行しない(採番は `wiki-page-write.py` の内側)。
 
 fetch の出力の `existing_sources=` が空でなければ、その論文は既に wiki にある。新しい source ページを作らず、挙がった既存ページを更新する(本文の追記、図表の補完、`updated:` の更新。address は再採番しない)。完了報告に `Existing: <既存ページ>` を書く。

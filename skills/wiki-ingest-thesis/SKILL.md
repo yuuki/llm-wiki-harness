@@ -58,6 +58,7 @@ bash scripts/fetch-book.sh --raw-root .raw/theses "<pdf-url|local-pdf-path>" "<s
 #   pdf=.raw/theses/<slug>/<slug>.pdf  txt=... toc=... chapters_dir=... chapter_NN=...
 ```
 
+- ACM DL / IEEE Xplore のサーベイ(例: IEEE COMST)は curl で取れないことが多い。`wiki-ingest-paper` の [`references/publisher-browser-fetch.md`](../wiki-ingest-paper/references/publisher-browser-fetch.md) の 1〜3 で PDF をブラウザから `~/Downloads` に落とし、そのローカルパスを `fetch-book.sh` に渡す。
 - slug 例: 博士論文 `phd-<姓>-<年>-<短縮題>`(例 `phd-sigelman-2021-tracing`)、サーベイ `arxiv-<id>`。
 - **取得前に既存 source と照合する**: `python3 scripts/paper-ids.py check "<arxiv-url|doi>" --compact`。`HIT` なら同じ論文が既に(多くは 1 枚ものの paper source として)wiki にある。章分割で取り込み直すときは、旧ページの `related:` と被リンクを章ページやハブ entity へ張り替えてから旧ページを削除するか、残す理由を旧ページ冒頭に書く。放置すると lint の `## Paper IDs` に「1 枚ものと章分割の併存」として出続ける。
 - ダウンロードが egress 拒否で失敗したらサンドボックス無効化で再実行(`wiki-ingest-paper` の「サンドボックスとネットワーク」参照)。
