@@ -99,7 +99,7 @@ Steps:
 
 ## Image Download & Embedding (URL sources)
 
-**Do not skip this for articles/blog posts that contain figures, diagrams, charts, or screenshots.** Text-only sources (opinion pieces, pure prose) can skip it — use judgment, don't force images where none add value.
+**Do not skip this for articles/blog posts that contain figures, diagrams, charts, or screenshots.** Diagrams written as code (` ```mermaid ` blocks) count too: see § 6. Text-only sources (opinion pieces, pure prose) can skip it — use judgment, don't force images where none add value.
 
 ### 1. Collect candidate image URLs
 
@@ -161,6 +161,16 @@ Place each image right after the paragraph/section it illustrates (not all bunch
 ```
 
 If the source page context makes the image self-explanatory, a shorter caption is fine — but always caption in Japanese, consistent with the rest of the page (`japanese-style` conventions apply here too). Source ページ自身に由来する本文の主張と画像キャプションには、冗長な `(Source: …)` インライン引用を付けない。出典は `sources:` frontmatter、`## 出典`、raw ソースへのリンクで保持し、ページ番号が必要な画像キャプションは `p.N` のように記す。外部ソースとの比較、矛盾、source 自身から遡及できない主張には明示的な出典リンクを付ける。entity / concept ページの出典表記はこの省略ルールの対象外である。
+
+### 6. Mermaid / コードで描かれた図も掲載する
+
+記事の図が画像ファイルでなく ` ```mermaid ` などの図コードで埋め込まれていることがある(defuddle / curl で得た本文に `graph TD` 等が残る)。画像と同じく**図は掲載対象**であり、「画像が無いから図なし」と判断しない。raw の本文に mermaid ブロックがあれば、次の手順で source ページへ載せる。
+
+- 原本(`.raw/articles/<slug>-<date>.md`)のコードブロックをそのまま使う。図のコードを創作・補完しない。ノード・矢印・`style` 行は原本どおりに保つ。
+- ノードとエッジのラベルは和訳してよい(`japanese-style` に従う)。構造と意味は変えない。
+- 該当する記述の直後に ` ```mermaid ` ブロックを置き、その下に画像と同じ形式で 1 行の日本語キャプションを付ける(「元記事の図。何を示すかを 1〜2 文で」)。
+- 図専用セクションは作らない。装飾だけの図は除外してよい(画像の選別基準と同じ)。
+- 図コードが載っていることは `wiki-verify-ingest.py` の `embeds=` には数えられない。ブロック数をチャット報告に書く。
 
 ### Sandbox note
 

@@ -348,6 +348,21 @@ class NumberCheckTest(unittest.TestCase):
         keys = mod.number_keys("F1 of 0.4837, two tiers, 10 million logs")
         self.assertTrue({"0.48", "0.5", "2", "10000000"} <= keys)
 
+    def test_leading_zero_less_decimals_match_their_zero_form(self):
+        mod = load_module()
+        # 古い論文の抽出テキストは先頭の 0 を省く(.5、.98977)。ページ側の 0.5 と同じ値として照らす
+        keys = mod.number_keys("p = .5 and q = .26, reliability .98977")
+        self.assertTrue({"0.5", "0.26", "0.98977"} <= keys)
+        got = dict(mod.number_mentions("確率 0.5 と .26"))
+        self.assertEqual(got[".26"], {"0.26"})
+        self.assertEqual(got["0.5"], {"0.5"})
+        # 節番号・略記・省略記号の後の数字は小数として読まない
+        lits = [lit for lit, _ in mod.number_mentions("Fig.5、§4.5、v1.2 と ...3 件")]
+        self.assertNotIn(".5", lits)
+        self.assertNotIn(".2", lits)
+        self.assertNotIn(".3", lits)
+        self.assertIn("4.5", lits)
+
     def test_sample_packet_reports_missing_and_raw_only_numbers(self):
         out = json.loads(run_script(["sample", "--pages", "集合通信", "--per-page", "10"], self.vault).stdout)
         first, second = out["claims"]

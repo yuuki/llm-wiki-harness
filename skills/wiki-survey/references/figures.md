@@ -123,10 +123,11 @@ python3 scripts/wiki-survey-check.py check "wiki/surveys/<タイトル>.md" --on
 
 ## 6. 著作権への配慮
 
-書籍ソースは `publish: false` を持つ(`wiki/meta/conventions.md` §9)。書籍由来の図を転載するかは**ユーザーの判断を仰ぐ**。
+書籍ソースは `publish: false` を持つ(`wiki/meta/conventions.md` §9)。ただし `publish: false` は外部公開の可否を示す設定であり、vault 内の survey への図の転載を妨げない。**`publish: false` のソースの図も、§3 の選定基準を満たせば確認なしで転載する**。
 
-- 転載する場合も、source 側と question 側の `publish` 設定は変更しない。
-- 転載しない判断になったら、図の代わりに本文の記述と参照リンクで済ませる。
+- 転載しても、source 側と survey 側の `publish` 設定は変更しない(survey は `publish: false` のまま保つ)。
+- 外部公開用の清書(`wiki-publish`)では、`publish: false` ソース由来の図を除く。公開側の判断はそちらで行う。
+- キャプションの出典行(§4)は書籍由来でも省略しない。
 
 ---
 

@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""wiki-retrieve-refresh.py — rechunk pages, rebuild the BM25 index, rebuild the link graph and theme chunks.
+"""wiki-retrieve-refresh.py — rechunk pages, rebuild the BM25 index, the dense page index, the link graph and theme chunks.
 
-Does not modify contextual-prefix.py, bm25-index.py or wiki-graph.py; only subprocesses them.
+Does not modify contextual-prefix.py, bm25-index.py, dense-index.py or wiki-graph.py; only subprocesses them.
 
 Usage:
-  wiki-retrieve-refresh.py --pages PATH [PATH ...] [--no-llm] [--no-graph]
-  wiki-retrieve-refresh.py --all [--no-llm] [--no-graph]
+  wiki-retrieve-refresh.py --pages PATH [PATH ...] [--no-llm] [--no-graph] [--no-dense]
+  wiki-retrieve-refresh.py --all [--no-llm] [--no-graph] [--no-dense]
 
 --no-llm is the default. Pass --allow-egress to let contextual-prefix use an LLM.
 The graph rebuild (`wiki-graph.py build`, a few seconds) runs after BM25 unless --no-graph;
 its failure is reported (graph_ok=false) but does not fail the refresh.
+`dense-index.py build` follows BM25 unless --no-dense. It re-embeds only pages whose
+body changed, via local ollama; without ollama it fails (dense_ok=false) and retrieve
+keeps working on the previous index, or without the dense channel.
 `wiki-clusters.py build` follows the graph rebuild (surveys は読まない)。失敗は
 clusters_ok=false であり retrieve は落とさない。
 
-Stdout JSON: {pages, chunks_written, chunks_unchanged, bm25_ok, graph_ok, clusters_ok}
+Stdout JSON: {pages, chunks_written, chunks_unchanged, bm25_ok, dense_ok, graph_ok, clusters_ok}
 
 Exit codes:
   0 — success
@@ -79,6 +82,8 @@ def main(argv=None):
                         help="Allow contextual-prefix LLM tiers (overrides --no-llm)")
     parser.add_argument("--no-graph", action="store_true",
                         help="Skip rebuilding .vault-meta/graph.json (retrieve graph channel)")
+    parser.add_argument("--no-dense", action="store_true",
+                        help="Skip updating .vault-meta/dense/ (retrieve dense channel)")
     args = parser.parse_args(argv)
 
     if not args.pages and not args.all:
@@ -142,6 +147,14 @@ def main(argv=None):
         failed = True
         log(f"wiki-retrieve-refresh: bm25-index.py build exit {bm25.returncode}")
 
+    dense_ok = None
+    dense_py = SCRIPT_DIR / "dense-index.py"
+    if not args.no_dense and dense_py.is_file():
+        dense = run_logged([sys.executable, str(dense_py), "build"])
+        dense_ok = dense.returncode == 0
+        if not dense_ok:
+            log(f"wiki-retrieve-refresh: dense-index.py build exit {dense.returncode} (retrieve keeps working without it)")
+
     graph_ok = None
     graph_py = SCRIPT_DIR / "wiki-graph.py"
     if not args.no_graph and graph_py.is_file():
@@ -166,6 +179,7 @@ def main(argv=None):
         "chunks_written": chunks_written if have_counts else None,
         "chunks_unchanged": chunks_unchanged if have_counts else None,
         "bm25_ok": bm25_ok,
+        "dense_ok": dense_ok,
         "graph_ok": graph_ok,
         "clusters_ok": clusters_ok,
     }

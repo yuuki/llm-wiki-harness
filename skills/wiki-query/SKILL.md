@@ -72,6 +72,7 @@ Do not open individual wiki pages in quick mode.
 ## Standard Query Workflow
 
 1. **Retrieve first**: `python3 scripts/retrieve.py "<question>" --top 5`
+1b. **Judge, then follow up only if needed**: if no candidate's title or snippet is about the asked thing itself, run the agentic follow-up in [追い検索の手順](references/agentic-followup.md) (resolve canonical names → page-vocabulary reformulations in one call with `retrieve.py "<question>" --also "<言い換え>" ...` → graph neighbours → `rg` for exact strings; at most two rounds). If a candidate already is, skip this.
 2. **Excerpt** each candidate: `python3 scripts/wiki-excerpt.py <path> --tail 15 --budget-tokens 1800` — do not Read full fat concept pages.
 3. If retrieve exits 10, fall back to `python3 scripts/wiki-resolve.py "<term>" --type any` + `rg`, then excerpt hits.
 4. Follow wikilinks from excerpts to depth-2 for key entities (excerpt those too). No deeper.
@@ -90,6 +91,7 @@ Use for synthesis questions, comparisons, or "tell me everything about X."
 Do not route back. If `wiki-survey` finds the population too thin, its own gate sends the work to `autoresearch` / `wiki-ingest-*`, not to this skill. Deep mode stays for single questions answerable in one pass.
 
 1. **Retrieve first**: `python3 scripts/retrieve.py "<question>" --top 10`
+1b. **Follow up per entity**: for each thing the question compares or asks about, check that some candidate is about it; for any that is missing, run the [agentic follow-up](references/agentic-followup.md) for that thing alone (at most two rounds each).
 2. **Excerpt** every candidate and follow wikilinks to related concepts, entities, and sources (excerpt those too — never Read full pages).
 3. If retrieve exits 10, fall back to `wiki-resolve.py` + `rg`, then excerpt.
 4. If wiki coverage is thin, offer to supplement with web search.
@@ -107,6 +109,7 @@ Read the minimum needed. Never Read catalog files (`index.md`, `_index.md`, `log
 |------|---------------|--------------|
 | Trimmed hot window (quick only) | ~2,000 tokens | If it has the answer |
 | `retrieve.py --top 5` | ~200 tokens JSON | Standard mode first step |
+| Agentic follow-up (resolve + 2–3 re-queries) | ~200–800 tokens JSON per round | Only when no candidate is about the asked thing; max 2 rounds |
 | 3-5 excerpts (`--tail 15 --budget-tokens 1800`) | ≤1,800 tokens each | Usually sufficient |
 | `retrieve.py --top 10` + 10 excerpts (deep) | ~8,000+ | Synthesis only |
 

@@ -13,9 +13,15 @@
 - `bib-lookup.py`。OpenAlex / Crossref を 1 つの CLI に集約する（`retracted` / `meta` / `pair` / `cites-both` / `refs` / `abstracts` / `population` / `search`）。無料枠の残額をヘッダで見て、尽きたら終了コード 4、通信失敗は 5 で止まる。`bibliography-lookup` の補助経路として書き、`wiki-lint`（撤回照会 check 19 と `## Retractions` 節）・`wiki-gap`（`cites-both` による橋渡し検索）・`wiki-ideate`・`wiki-publish`（書誌の正式化と撤回確認）・`wiki-survey-recommend`（母集団の厚み）・`wiki-ingest-paper`（出版社版の書誌、arXiv 版との対応）から呼ぶ。`test_bib_lookup.py` を足した。
 - `fetch-paper-pdf.sh` が ACM DL / IEEE Xplore で curl が弾かれたとき、終了コード 5 と `browser_fetch=` などの引き継ぎ出力を返す。手順は `wiki-ingest-paper/references/publisher-browser-fetch.md`（Claude in Chrome 拡張つきのブラウザで PDF を落とし、ローカルパスで取り込み直す）。PVLDB は `www.vldb.org` の公開 PDF を curl で取る。
 - `bm25-index.py` が SQLite 鏡像（`.vault-meta/bm25/index.sqlite`）も書く。`retrieve.py` は鏡像が JSON と同じ版なら語ごとの posting だけを読み、巨大な JSON を全部読み込まない。古ければ JSON に戻る。`bm25-index.py sqlite` で鏡像だけ作り直せる。`wiki-doctor.py` に `bm25_sqlite` 検査を足した。
+- `dense-index.py`。ページ先頭（chunk-000）を 1 ページ 1 ベクトルで埋め込み、`.vault-meta/dense/` に置く。`retrieve.py` は語の重なりが無い言い換えの問いでも、この索引から近いページを rerank の候補に足す（ローカル ollama のみ。無ければ従来どおり BM25 とグラフだけ）。`wiki-retrieve-refresh.py` が BM25 の後に差分だけ更新し（`--no-dense` で省略）、`test_dense_index.py` を足した。
+- `retrieve.py --also "<言い換え>"`。言い換えごとにパイプラインを走らせ、元の問いに 2 倍の重みを付けて RRF で融合する（候補に `multi_score` / `matched_queries`）。手順は `skills/wiki-query/references/agentic-followup.md`（最初の retrieve が問いの対象を外したときだけ、名前の照合 → 言い換え → 近傍 → `rg` を最大 2 周）。`wiki-query` / `wiki-survey` / `wiki-thesis` から参照する。
 
 ### Changed
 
+- `rerank.py` の既定の埋め込みモデルを `qwen3-embedding:0.6b` にし、モデルごとの文書接頭辞と `WIKI_EMBED_MODEL` での差し替えに対応した。
+- `claim-audit.py numbers` は先頭の 0 を省いた小数（`.5`）も数値として照合する。
+- `wiki-ingest` は記事内の mermaid ブロックも図として source ページへ載せる（原本のコードをそのまま使い、ラベルだけ和訳してよい）。
+- `wiki-survey` は書籍ソース（`publish: false`）の図も、選定基準を満たせば確認なしで転載する（source と survey の `publish` は変えない）。
 - `retrieve.py` の検索を `Searcher` に切り出し、常駐する呼び出し側がインデックスを再利用できるようにした。`wiki-context-pack.py` の束作りも `pack()` に切り出した（CLI の挙動は変えない）。
 - `wiki-refactor` の再編纂手順に、実行環境の注意（シェル差、ロックの二重取り、並行セッションの巻き込み確認、`prepend-log` の訂正）、観察と出典の食い違いを突き合わせる 4 点、ハブ entity にだけ依る観察の張り替え、`claim-audit.py sample` の stderr 分離を足した。
 - `wiki-ingest-thesis` は ACM / IEEE のサーベイを取るとき、`publisher-browser-fetch.md` の手順で PDF を手元に落としてから `fetch-book.sh` に渡す。

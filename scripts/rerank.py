@@ -5,10 +5,16 @@ Takes a query string + a list of candidate chunks (from BM25, vector, or any
 upstream stage) and reorders them using semantic similarity.
 
 v1.7 strategy (in preference order, automatically chosen at runtime):
-  1. If ollama is reachable AND nomic-embed-text is pulled
+  1. If ollama is reachable AND the embedding model is pulled
+       (qwen3-embedding:0.6b by default; override with WIKI_EMBED_MODEL)
        → embed the query, embed each candidate's contextualized_text,
          rank by cosine. Caches per-chunk embeddings in
-         .vault-meta/embed-cache.json keyed by body_hash.
+         .vault-meta/embed-cache.json keyed by model + body_hash.
+         Query / document prefixes follow the model's own convention
+         (see EMBED_PREFIXES).
+         WIKI_READ_ONLY=1 reads the cache but never writes it (callers from
+         other projects whose sandbox cannot write into the vault); a
+         long-running caller still reuses new embeddings in memory.
   2. Otherwise
        → no-op rerank: return candidates in input order with a synthesized
          note. Caller (retrieve.py) still gets a useful result; downstream
@@ -61,9 +67,26 @@ EMBED_CACHE_PATH = META_DIR / "embed-cache.json"
 CACHE_LOCK = META_DIR / ".embed-cache.lock"
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-DEFAULT_MODEL = "nomic-embed-text"
+# Multilingual: the vault is mostly Japanese, and nomic-embed-text v1.5 is English-centric.
+# 0.6b over 4b: on 26 paraphrased Japanese queries 4b ranked the target first 15 times and
+# 0.6b 11 times, at about a quarter of the embedding time; the dense candidate channel in
+# retrieve.py (dense-index.py) recovers more than that gap.
+DEFAULT_MODEL = os.environ.get("WIKI_EMBED_MODEL") or "qwen3-embedding:0.6b"
 OLLAMA_TIMEOUT_SEC = 3
-EMBED_TIMEOUT_SEC = 30
+# The first call after idle loads the model into memory, and a batch is one request.
+EMBED_TIMEOUT_SEC = 120
+EMBED_BATCH = 32
+
+# (query_prefix, document_prefix) keyed by model family (name before the tag).
+# Qwen3-Embedding is trained with an instruction on the query side only;
+# nomic-embed-text expects task prefixes on both sides.
+EMBED_PREFIXES = {
+    "qwen3-embedding": (
+        "Instruct: Given a question, retrieve wiki passages that answer the question\nQuery: ",
+        "",
+    ),
+    "nomic-embed-text": ("search_query: ", "search_document: "),
+}
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 EXIT_OK = 0
@@ -107,32 +130,81 @@ def ollama_alive(url):
         req = urllib.request.Request(f"{url}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=OLLAMA_TIMEOUT_SEC) as resp:
             data = json.loads(resp.read(MAX_RESPONSE_BYTES))
-            models = [m.get("name", "").split(":")[0] for m in data.get("models", [])]
+            models = [m.get("name", "") for m in data.get("models", [])]
             return True, models
     except (urllib.error.URLError, json.JSONDecodeError, OSError):
         return False, []
 
 
-def embed_one(url, model, text):
-    payload = json.dumps({"model": model, "prompt": text}).encode("utf-8")
+def model_present(model, models):
+    """Compare with the tag: pulling `x:4b` does not make `x` (= `x:latest`) callable."""
+    want = model if ":" in model else f"{model}:latest"
+    return want in models
+
+
+def prefixes(model):
+    return EMBED_PREFIXES.get(model.split(":")[0], ("", ""))
+
+
+def embed_many(url, model, texts):
+    """Embed texts in one /api/embed request (about 15x faster than one call per text)."""
+    payload = json.dumps({"model": model, "input": texts}).encode("utf-8")
     req = urllib.request.Request(
-        f"{url}/api/embeddings",
+        f"{url}/api/embed",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=EMBED_TIMEOUT_SEC) as resp:
-        data = json.loads(resp.read(MAX_RESPONSE_BYTES))
-        return data.get("embedding") or []
+        data = json.loads(resp.read(MAX_RESPONSE_BYTES * max(1, len(texts))))
+    embs = data.get("embeddings") or []
+    if len(embs) != len(texts):
+        raise ValueError(f"expected {len(texts)} embeddings, got {len(embs)}")
+    return embs
+
+
+def embed_one(url, model, text):
+    return embed_many(url, model, [text])[0]
+
+
+def embed_query(query, allow_remote=False):
+    """Query embedding for retrieve.py's dense channel, or None when ollama/model is missing."""
+    url = ollama_url(allow_remote)
+    alive, models = ollama_alive(url)
+    if not alive or not model_present(DEFAULT_MODEL, models):
+        return None
+    q_prefix, _ = prefixes(DEFAULT_MODEL)
+    try:
+        return embed_one(url, DEFAULT_MODEL, q_prefix + query)
+    except Exception as e:
+        log(f"query embed failed: {e}")
+        return None
+
+
+_cache_memo = (None, None)  # (mtime_ns, dict)
 
 
 def load_cache():
-    if not EMBED_CACHE_PATH.is_file():
-        return {}
+    """埋め込みキャッシュをプロセス内に保持して返す。
+
+    ファイルが変わらない限り同じ dict を返すので、常駐プロセス(wiki-mcp)では
+    WIKI_READ_ONLY で保存しない新しい埋め込みも次の問いで再利用される。
+    """
+    global _cache_memo
     try:
-        return json.loads(EMBED_CACHE_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+        mtime = EMBED_CACHE_PATH.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    if _cache_memo[1] is not None and _cache_memo[0] == mtime:
+        return _cache_memo[1]
+    cache = {}
+    if mtime is not None:
+        try:
+            cache = json.loads(EMBED_CACHE_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            cache = {}
+    _cache_memo = (mtime, cache)
+    return cache
 
 
 def save_cache(cache):
@@ -195,9 +267,10 @@ def load_chunk(chunk_rel_path):
         return None
 
 
-def rerank(query, candidates, top_k=5, allow_remote=False):
+def rerank(query, candidates, top_k=5, allow_remote=False, q_emb=None):
     """Returns candidates list, possibly truncated to top_k, with rerank_score added.
     Falls back to input-order if ollama is unavailable (still adds rerank_source: 'noop').
+    q_emb: query embedding already computed by the caller (retrieve.py's dense channel).
     """
     url = ollama_url(allow_remote)
     alive, models = ollama_alive(url)
@@ -207,17 +280,19 @@ def rerank(query, candidates, top_k=5, allow_remote=False):
             c["rerank_score"] = float(c.get("score", 0.0))
             c["rerank_source"] = "noop-no-ollama"
         return candidates[:top_k]
-    if DEFAULT_MODEL not in models:
+    if not model_present(DEFAULT_MODEL, models):
         log(f"model {DEFAULT_MODEL} not pulled — no-op rerank")
         for c in candidates:
             c["rerank_score"] = float(c.get("score", 0.0))
             c["rerank_source"] = "noop-no-model"
         return candidates[:top_k]
 
+    q_prefix, d_prefix = prefixes(DEFAULT_MODEL)
     cache = load_cache()
     cache_dirty = False
     try:
-        q_emb = embed_one(url, DEFAULT_MODEL, query)
+        if q_emb is None:
+            q_emb = embed_one(url, DEFAULT_MODEL, q_prefix + query)
     except Exception as e:
         log(f"query embed failed: {e}")
         for c in candidates:
@@ -225,30 +300,45 @@ def rerank(query, candidates, top_k=5, allow_remote=False):
             c["rerank_source"] = "noop-embed-error"
         return candidates[:top_k]
 
+    keys = {}     # id(candidate) -> cache key
+    pending = []  # (candidate, cache_key, text) whose embedding is not cached
     for c in candidates:
         chunk = load_chunk(c.get("path", ""))
         if not chunk:
             c["rerank_score"] = 0.0
             c["rerank_source"] = "missing-chunk"
             continue
-        body_hash = chunk.get("body_hash", "")
-        cache_key = f"{DEFAULT_MODEL}:{body_hash}"
-        emb = cache.get(cache_key)
-        if not emb:
-            text = chunk.get("contextualized_text") or chunk.get("raw_text", "")
-            try:
-                emb = embed_one(url, DEFAULT_MODEL, text)
-            except Exception as e:
-                log(f"embed failed for {c.get('chunk_id')}: {e}")
-                c["rerank_score"] = float(c.get("score", 0.0))
-                c["rerank_source"] = "embed-error"
-                continue
-            cache[cache_key] = emb
+        cache_key = f"{DEFAULT_MODEL}:{chunk.get('body_hash', '')}"
+        keys[id(c)] = cache_key
+        if cache.get(cache_key):
+            continue
+        text = chunk.get("contextualized_text") or chunk.get("raw_text", "")
+        pending.append((c, cache_key, d_prefix + text))
+
+    failed = set()
+    for n in range(0, len(pending), EMBED_BATCH):
+        batch = pending[n:n + EMBED_BATCH]
+        try:
+            embs = embed_many(url, DEFAULT_MODEL, [t for _, _, t in batch])
+        except Exception as e:
+            log(f"embed failed for {len(batch)} chunk(s): {e}")
+            failed.update(id(c) for c, _, _ in batch)
+            continue
+        for (_, key, _), emb in zip(batch, embs):
+            cache[key] = emb
             cache_dirty = True
-        c["rerank_score"] = cosine(q_emb, emb)
+
+    for c in candidates:
+        if id(c) not in keys:
+            continue
+        if id(c) in failed:
+            c["rerank_score"] = float(c.get("score", 0.0))
+            c["rerank_source"] = "embed-error"
+            continue
+        c["rerank_score"] = cosine(q_emb, cache.get(keys[id(c)]))
         c["rerank_source"] = f"cosine:{DEFAULT_MODEL}"
 
-    if cache_dirty:
+    if cache_dirty and os.environ.get("WIKI_READ_ONLY") != "1":
         save_cache(cache)
 
     ranked = sorted(candidates, key=lambda x: x.get("rerank_score", 0.0), reverse=True)
@@ -275,13 +365,14 @@ def main():
         alive, models = ollama_alive(url)
         strategy = "noop-no-ollama"
         if alive:
-            strategy = f"cosine:{DEFAULT_MODEL}" if DEFAULT_MODEL in models else "noop-no-model"
+            strategy = f"cosine:{DEFAULT_MODEL}" if model_present(DEFAULT_MODEL, models) else "noop-no-model"
         print(json.dumps({
             "query": args.query,
             "strategy": strategy,
             "ollama_url": url,
             "ollama_alive": alive,
-            "model_present": DEFAULT_MODEL in models,
+            "model": DEFAULT_MODEL,
+            "model_present": model_present(DEFAULT_MODEL, models),
             "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }, indent=2))
         return EXIT_OK

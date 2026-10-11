@@ -7,8 +7,18 @@ Pipeline (v1.7):
                               wikilink / shared-source edges, fused by RRF; only
                               when .vault-meta/graph.json exists, --no-graph disables.
                               An absent or empty graph leaves the output unchanged.)
-         →  rerank.py        (cosine on nomic-embed-text vectors via ollama,
+         →  dense channel    (dense-index.py: pages whose lead embedding is nearest
+                              to the query, added to the pool so a paraphrase with
+                              no shared words can still reach the reranker; only
+                              when the index for the rerank model exists and ollama
+                              answers, --no-dense disables. An absent index leaves
+                              the output unchanged.)
+         →  rerank.py        (cosine on qwen3-embedding:0.6b vectors via ollama,
                               or no-op if ollama unavailable)
+         →  fuse             (only with the dense channel: final order is RRF over
+                              the BM25, page-dense and rerank ranks, `fused_score`)
+         →  multi-query      (only with --also: the same pipeline per reformulation,
+                              pages fused by weighted RRF, the original weighted 2)
          →  drill            (return chunk pages with absolute paths so the
                               caller can Read them and synthesize)
 
@@ -27,7 +37,7 @@ gracefully when index or rerank stage is missing:
 Output schema (JSON to stdout):
 {
   "query": "...",
-  "strategy": "bm25+rerank:cosine:nomic-embed-text" | "bm25+noop-rerank",
+  "strategy": "bm25+rerank:cosine:qwen3-embedding:0.6b+graph+dense" | "bm25+noop-rerank",
   "top_k": 5,
   "candidates": [
     {
@@ -38,10 +48,13 @@ Output schema (JSON to stdout):
       "chunk_index": 3,
       "bm25_score": 7.12,
       "rerank_score": 0.81,
-      "rerank_source": "cosine:nomic-embed-text",
+      "rerank_source": "cosine:qwen3-embedding:0.6b",
       "snippet": "... first 200 chars of the chunk ...",
       "graph_score": 0.31,              # only on candidates the graph channel touched
       "channels": ["graph"],            # only on candidates the graph channel added
+                                        # (["dense"] for pages only the dense channel found)
+      "dense_score": 0.62,              # only on candidates the dense channel added
+      "fused_score": 0.047,             # only when the dense channel ran (final sort key)
       "via": [{"from", "to", "kind?", "sources", "loc?", "hops"}]  # added or boosted; omitted on v1 graphs
     },
     ...
@@ -49,10 +62,12 @@ Output schema (JSON to stdout):
 }
 
 Usage:
-  retrieve.py "your query here"           # standard: BM25 top-20, rerank to top-5
+  retrieve.py "your query here"           # standard: BM25 top-50 + dense top-20, rerank to top-5
   retrieve.py "query" --top 10            # change result count
   retrieve.py "query" --no-rerank         # skip rerank, BM25-only (+graph, RRF order)
   retrieve.py "query" --no-graph          # skip the graph channel
+  retrieve.py "query" --no-dense          # skip the dense channel
+  retrieve.py "query" --also "言い換え" --also "English term"   # agentic follow-up in one call
   retrieve.py "query" --graph-top 8 --graph-hops 2   # widen the graph channel
   retrieve.py "query" --graph-people      # also let authors / organizations in via the graph
   retrieve.py "query" --explain           # include per-stage diagnostics
@@ -83,6 +98,20 @@ EXIT_USAGE = 2
 EXIT_NOT_PROVISIONED = 10
 
 RRF_K = 60
+# Weight of the original question against each --also reformulation. On 25 paraphrased
+# queries with three blind rewrites: weight 1 raised hit@1 12 -> 14 but lowered hit@3
+# 20 -> 19; weight 2 kept hit@1 at 14 and no metric fell below the single query.
+MULTI_ORIG_WEIGHT = 2.0
+MULTI_PER_QUERY = 30
+
+
+def rank_of(values):
+    """1-based rank of each value, highest first (ties keep input order)."""
+    order = sorted(range(len(values)), key=lambda i: -values[i])
+    ranks = [0] * len(values)
+    for r, i in enumerate(order, 1):
+        ranks[i] = r
+    return ranks
 
 
 def log(msg):
@@ -232,6 +261,9 @@ class Searcher:
     def __init__(self):
         self.bm25 = import_sibling("bm25_index", "bm25-index.py")
         self.reranker = import_sibling("rerank", "rerank.py")
+        self._dense_mod = None
+        self._dense = None
+        self._dense_stamp = None
         self._graph_mod = None
         self._prefix_mod = None
         self._index = None
@@ -270,9 +302,21 @@ class Searcher:
             self._graph_stamp = stamp
         return self._graph
 
-    def search(self, query, top=5, bm25_top=20, no_rerank=False, explain=False,
+    def dense(self):
+        if self._dense_mod is None:
+            self._dense_mod = import_sibling("dense_index", "dense-index.py")
+        paths = self._dense_mod.index_paths(self.reranker.DEFAULT_MODEL)
+        if not paths[0].is_file():
+            return None
+        stamp = self._stamp(*paths)
+        if self._dense is None or stamp != self._dense_stamp:
+            self._dense = self._dense_mod.load_index(self.reranker.DEFAULT_MODEL)
+            self._dense_stamp = stamp
+        return self._dense
+
+    def search(self, query, top=5, bm25_top=50, no_rerank=False, explain=False,
                allow_remote_ollama=False, no_graph=False, graph_top=5, graph_seeds=5,
-               graph_hops=1, graph_people=False):
+               graph_hops=1, graph_people=False, no_dense=False, dense_top=20):
         bm25 = self.bm25
         bm25_index = self.index()
 
@@ -333,6 +377,40 @@ class Searcher:
                 candidates = rrf_fuse(candidates, added, boosted)
                 log(f"graph: +{len(added)} page(s), {len(boosted)} boosted")
 
+        # Dense channel: needs the query embedding, so it only runs when rerank does.
+        dense_info = {"active": False}
+        q_emb = None
+        dense = None if (no_rerank or no_dense) else self.dense()
+        if dense:
+            q_emb = self.reranker.embed_query(query, allow_remote=allow_remote_ollama)
+        if dense and q_emb:
+            have = {c["page_path"] for c in candidates}
+            added = []
+            for score, entry in self._dense_mod.query(dense, q_emb, top_k=dense_top):
+                if entry["path"] in have:
+                    continue
+                chunk_rel = f".vault-meta/chunks/{entry['address']}/chunk-000.json"
+                try:
+                    chunk = json.loads((VAULT_ROOT / chunk_rel).read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                added.append({
+                    "chunk_id": f"{entry['address']}:0",
+                    "page_address": entry["address"],
+                    "page_path": entry["path"],
+                    "absolute_path": str((VAULT_ROOT / entry["path"]).resolve()),
+                    "chunk_index": 0,
+                    "bm25_score": 0.0,
+                    "path": chunk_rel,
+                    "snippet": chunk_snippet(chunk),
+                    "channels": ["dense"],
+                    "dense_score": round(score, 4),
+                })
+            candidates = candidates + added
+            dense_info = {"active": True, "added": [c["page_path"] for c in added]}
+            if added:
+                log(f"dense: +{len(added)} page(s)")
+
         if no_rerank:
             final = candidates[:top]
             strategy = "bm25-only"
@@ -340,24 +418,40 @@ class Searcher:
                 c["rerank_score"] = c["bm25_score"]
                 c["rerank_source"] = "skipped"
         else:
+            fuse = bool(dense_info["active"])
             final = self.reranker.rerank(
-                query, candidates, top_k=top,
-                allow_remote=allow_remote_ollama,
+                query, candidates, top_k=len(candidates) if fuse else top,
+                allow_remote=allow_remote_ollama, q_emb=q_emb,
             )
+            if fuse and final and str(final[0].get("rerank_source", "")).startswith("cosine"):
+                # The wider pool (BM25 top-50 + dense) lets more near-misses past a small
+                # reranker; ranking on rerank cosine alone dropped hit@1 from 11 to 9 of 26.
+                # RRF over the three ranks kept hit@1 at 11 and raised MRR 0.558 -> 0.613.
+                pages = [c["page_path"] for c in final]
+                dense_r = rank_of(self._dense_mod.page_scores(dense, q_emb, pages))
+                bm25_r = rank_of([c.get("bm25_score") or -1.0 for c in final])
+                rerank_r = rank_of([c.get("rerank_score") or 0.0 for c in final])
+                for c, b, d, r in zip(final, bm25_r, dense_r, rerank_r):
+                    c["fused_score"] = round(1 / (RRF_K + b) + 1 / (RRF_K + d) + 1 / (RRF_K + r), 6)
+                final.sort(key=lambda c: c["fused_score"], reverse=True)
+            final = final[:top]
             # Derive strategy from first candidate's rerank_source
             first_src = (final[0].get("rerank_source") if final else "unknown")
             strategy = f"bm25+rerank:{first_src}"
         if graph_info["active"] and (graph_info["added"] or graph_info["boosted"]):
             strategy += "+graph"
+        if dense_info["active"] and dense_info["added"]:
+            strategy += "+dense"
 
         # Dedupe by page (we may have multiple chunks of the same page; collapse to best)
+        key = "fused_score" if final and "fused_score" in final[0] else "rerank_score"
         by_page = {}
         for c in final:
             addr = c.get("page_address")
-            if addr not in by_page or c.get("rerank_score", 0) > by_page[addr].get("rerank_score", 0):
+            if addr not in by_page or c.get(key, 0) > by_page[addr].get(key, 0):
                 by_page[addr] = c
         deduped = list(by_page.values())
-        deduped.sort(key=lambda c: c.get("rerank_score", 0), reverse=True)
+        deduped.sort(key=lambda c: c.get(key, 0), reverse=True)
 
         out = {
             "query": query,
@@ -372,8 +466,47 @@ class Searcher:
                 "deduped_count": len(deduped),
                 "bm25_top_param": bm25_top,
                 "graph": graph_info,
+                "dense": dense_info,
             }
         return out
+
+
+def search_multi(searcher, queries, top=5, explain=False, **kw):
+    """Run the pipeline once per query and fuse pages by weighted RRF.
+
+    queries[0] is the original question (weight MULTI_ORIG_WEIGHT), the rest are the
+    caller's reformulations (weight 1). Each page keeps the candidate row from the query
+    that ranked it highest; `matched_queries` lists the indices of queries that hit it.
+    """
+    runs = [searcher.search(q, top=MULTI_PER_QUERY, explain=explain, **kw) for q in queries]
+    score, best, matched = {}, {}, {}
+    for qi, run in enumerate(runs):
+        w = MULTI_ORIG_WEIGHT if qi == 0 else 1.0
+        for rank, c in enumerate(run["candidates"], 1):
+            page = c.get("page_path")
+            score[page] = score.get(page, 0.0) + w / (RRF_K + rank)
+            matched.setdefault(page, []).append(qi)
+            if page not in best or rank < best[page][0]:
+                best[page] = (rank, c)
+    fused = []
+    for page in sorted(score, key=lambda p: -score[p])[:top]:
+        row = dict(best[page][1])
+        row["multi_score"] = round(score[page], 6)
+        row["matched_queries"] = matched[page]
+        fused.append(row)
+    out = {
+        "query": queries[0],
+        "also": queries[1:],
+        "strategy": f"{runs[0]['strategy']}+multi{len(queries)}",
+        "top_k": top,
+        "candidates": fused,
+    }
+    if explain:
+        out["explain"] = {"per_query": [{"query": q, "strategy": r["strategy"],
+                                         "candidates": len(r["candidates"]),
+                                         "explain": r.get("explain")}
+                                        for q, r in zip(queries, runs)]}
+    return out
 
 
 def provisioned():
@@ -392,7 +525,9 @@ def main():
     parser = argparse.ArgumentParser(description="Hybrid retrieval over the vault.")
     parser.add_argument("query", help="Natural-language query")
     parser.add_argument("--top", type=int, default=5, help="Final result count (post-rerank)")
-    parser.add_argument("--bm25-top", type=int, default=20,
+    # 50, not 20: on 26 paraphrased queries 20 missed the target page in 6, 50 in 4,
+    # and 100 or 200 still in 4 (those need the dense channel).
+    parser.add_argument("--bm25-top", type=int, default=50,
                         help="Candidate count from BM25 (pre-rerank)")
     parser.add_argument("--no-rerank", action="store_true",
                         help="Skip the rerank stage; return BM25-only")
@@ -410,6 +545,13 @@ def main():
                         help="Neighbourhood radius (default 1)")
     parser.add_argument("--graph-people", action="store_true",
                         help="Let the graph channel add person / organization entities too")
+    parser.add_argument("--no-dense", action="store_true",
+                        help="Skip the dense channel even if .vault-meta/dense/ has an index")
+    parser.add_argument("--dense-top", type=int, default=20,
+                        help="Max pages the dense channel may consider (default 20)")
+    parser.add_argument("--also", action="append", default=[], metavar="QUERY",
+                        help="Reformulation to search too (repeatable); pages are fused by "
+                             "RRF with the original question weighted 2")
     args = parser.parse_args()
 
     problem = provisioned()
@@ -417,12 +559,19 @@ def main():
         log(problem)
         return EXIT_NOT_PROVISIONED
 
-    out = Searcher().search(
-        args.query, top=args.top, bm25_top=args.bm25_top, no_rerank=args.no_rerank,
-        explain=args.explain, allow_remote_ollama=args.allow_remote_ollama,
+    kw = dict(
+        bm25_top=args.bm25_top, no_rerank=args.no_rerank,
+        allow_remote_ollama=args.allow_remote_ollama,
         no_graph=args.no_graph, graph_top=args.graph_top, graph_seeds=args.graph_seeds,
         graph_hops=args.graph_hops, graph_people=args.graph_people,
+        no_dense=args.no_dense, dense_top=args.dense_top,
     )
+    searcher = Searcher()
+    also = [q for q in args.also if q.strip() and q != args.query]
+    if also:
+        out = search_multi(searcher, [args.query, *also], top=args.top, explain=args.explain, **kw)
+    else:
+        out = searcher.search(args.query, top=args.top, explain=args.explain, **kw)
     print(json.dumps(out, indent=2, ensure_ascii=False))
     return EXIT_OK
 

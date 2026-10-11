@@ -103,7 +103,7 @@ class PaperIdsTest(unittest.TestCase):
     # --- check / dupes / 章畳み込み --------------------------------------------
     def test_check_and_dupes_fold_chapters(self):
         self.write("@2017__NeurIPS__Attention Is All You Need", page("Attention Is All You Need", url="https://arxiv.org/abs/1706.03762"))
-        self.write("@2026__30papers__Attention Is All You Need", page("Attention Is All You Need", url="https://arxiv.org/pdf/1706.03762v7"))
+        self.write("@2017__NeurIPS__Attention Is All You Need（30papers）", page("Attention Is All You Need", url="https://arxiv.org/pdf/1706.03762v7"))
         for n in (1, 2):
             self.write(f"@2024__TMLR__Survey - Chapter {n} Part", page(f"Survey - Chapter {n} Part", url="https://arxiv.org/abs/2312.03863"))
         code, out = self.run_cmd("check", "1706.03762", "https://arxiv.org/abs/2312.03863v2", "9999.99999", "--compact")

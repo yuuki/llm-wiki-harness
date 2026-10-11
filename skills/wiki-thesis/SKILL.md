@@ -73,6 +73,7 @@ python3 scripts/wiki-resolve.py "<名前>" --type any
 ```
 
 - `retrieve.py` の候補のうち `channels: ["graph"]` だけのものは、BM25 が拾えない語彙のページである。命題に触れているかは抜粋で確かめる。
+- 命題の主語や述語にあたる concept・entity のページが候補に 1 件も無いときは、`insufficient` と判定する前に [`wiki-retrieve` の追い検索](../wiki-query/references/agentic-followup.md)を最大 2 周行う(正式名称の照合、ページの語彙での言い換え、近傍、`rg`)。言い換えは自分で書く。
 - 候補ページは `wiki-excerpt.py <path> --tail 15 --budget-tokens 1800` で読む。全文 Read しない。抜粋で足りないときだけ `--section` で節を指定して広げる。
 - 候補の和集合から、**命題に触れている source ページ**を数える。concept ページの命題は source を経由して数える(concept の命題 1 行は、その `根拠:` が引く source の本数だけ独立した根拠になる。concept 自体を 1 本と数えない)。
 

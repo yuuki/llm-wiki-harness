@@ -96,7 +96,7 @@ python3 scripts/retrieve.py "<下位問い 1>" --top 10
 
 `retrieve.py` は BM25 インデックスまたは chunks が無いと終了コード 10 で失敗する。その場合は wiki-query と同じフォールバックへ落ち、`wiki-resolve.py` と `rg` で母集団を作る。
 
-2. 出力の `candidates` を和集合にする。ヒットした concept のうち最も射程の広いものを**起点 concept** とする。
+2. 出力の `candidates` を和集合にする。ヒットした concept のうち最も射程の広いものを**起点 concept** とする。下位問いのうち、その問いの対象を扱う concept・entity が和集合に 1 件も無いものは、[`wiki-retrieve` の追い検索](../wiki-query/references/agentic-followup.md)を最大 2 周行ってから母集団を確定する(正式名称の照合、ページの語彙での言い換え、近傍、`rg`)。それでも無ければ、その下位問いは母集団が薄いものとして扱う。
 
 3. 起点 concept の frontmatter は `wiki-excerpt.py` を通さず、YAML 部分を直接読む。`scripts/wiki-excerpt.py` は `sources` と `related` を各 8 件で打ち切るため(`LIST_CAPS`)、45 件の `sources` を持つ concept でも 8 件しか見えない。母集団の拡張を excerpt に頼ると、目安の件数に届かないまま合意してしまう。本文の要約が欲しいときだけ excerpt を使う。
 
@@ -183,7 +183,7 @@ python3 scripts/wiki-page-write.py "wiki/surveys/<タイトル>.md" --content-fi
 3. 当たりを付けた候補は**必ず実見**する(figures.md §3)。ファイル名と中身が一致しない例、複数の図が 1 ファイルにクロップされている例が実際に起きる。中身が主張を裏づけないもの、装飾目的のものは採らない。
 4. 実見した結果、選定基準を満たす候補が 1 件もなければ、その旨(何ページの `_attachments` を何点確認し、なぜ不採用にしたか)を log に残したうえで 0 点にする。確認した件数が log から追える状態にする。
 
-総括章・座標系の章・未解決の問いには貼らない(figures.md §2)。書籍ソース(`publish: false`)の図はユーザー判断を仰ぐ(figures.md §6)。
+総括章・座標系の章・未解決の問いには貼らない(figures.md §2)。書籍ソース(`publish: false`)の図も、選定基準を満たせば確認なしで転載する(figures.md §6)。
 
 編集も lock 下で行う。転載は候補の実見と挿入を繰り返して分単位になるため、stale 時間を延ばす。
 
@@ -290,7 +290,7 @@ python3 scripts/wiki-retrieve-refresh.py --pages "wiki/surveys/<タイトル>.md
 - 本文完成前の図表挿入。
 - **候補の実探索(フェーズ 5、figures.md §1)を行わずに図表転載を省略すること**。他ページに 0 点の実例があることは探索を飛ばす理由にならない。ユーザーから改めて図表挿入を求められてから探索を始めるのではなく、フェーズ 5 で自発的に行う。
 - 姉妹ページと重複する章を書くこと。参照で済ませる。
-- 書籍ソース(`publish: false`)の図を、ユーザー判断を仰がずに転載すること。publish 設定は変更しない。
+- 書籍ソース(`publish: false`)であることを理由に図の転載を省くこと。転載しても source と survey の publish 設定は変更しない。
 - `.raw/` 配下の原本の改変。`wiki/log.md` の過去エントリの編集。
 - 母集団が薄いまま編纂を始めること。文献を足す工程は `autoresearch` と `wiki-ingest-*` の仕事である。
 - 要約だけ、または一部のページだけを返した精読 subagent の結果を素材として採ること。再投入するか、欠けたページをメイン文脈が読む。
