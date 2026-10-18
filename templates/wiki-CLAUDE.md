@@ -9,7 +9,7 @@
   - `sources/` / `entities/` / `concepts/` / `questions/` / `asks/` / `briefs/` / `surveys/` / `meta/`
   - `index.md` カタログ / `hot.md` 直近窓 / `log.md` 今月の操作履歴 / `log/YYYY-MM.md` 過去月の操作履歴（`prepend-log` が月替わりに自動で移す） / `overview.md`
 - `.vault-meta/` — `mode.json` / `transport.json` / lock / address カウンタ
-- `scripts/` — カタログ・解決・抜粋・retrieve・原本取得に加え、矛盾索引・再編纂キュー・再編纂の確定（`recompile-finalize.sh`）・命題再検証・問い節の断定判定（`wiki_questions.py`）・ページグラフ（`graph.json` version 2。辺に `via`）・テーマ塊（`wiki-clusters.py` の `lookup` / `members` だけをスキルから呼ぶ。`.vault-meta/clusters.json` は Read しない）・配役つき近傍（`wiki-related.py`。stdout だけ見る。`.vault-meta/related/` を Read するな）・concept 候補台帳・concept 方言表（`concept-resolve.py`）・論文 ID・論文の文献表台帳（`paper-refs.py`）・entity 名寄せ・関心要約・survey のテーマ推薦と機械検査（`wiki-survey-recommend.py` / `wiki-survey-check.py`）・原本 manifest の 1 件読み書き（`wiki-manifest.py`）・コンテキスト束・機械状態検査
+- `scripts/` — カタログ・解決・抜粋・retrieve・原本取得に加え、矛盾索引・再編纂キュー・再編纂の確定（`recompile-finalize.sh`）・命題再検証・concept の構造欠落の報告（`wiki-concept-stats.py --structure`）・PDF の読み順テキスト抽出と品質判定（`pdf-text.sh` / `pdf-text-quality.py` / `pdf-ocr.sh`）・問い節の断定判定（`wiki_questions.py`）・ページグラフ（`graph.json` version 2。辺に `via`）・テーマ塊（`wiki-clusters.py` の `lookup` / `members` だけをスキルから呼ぶ。`.vault-meta/clusters.json` は Read しない）・配役つき近傍（`wiki-related.py`。stdout だけ見る。`.vault-meta/related/` を Read するな）・concept 候補台帳・concept 方言表（`concept-resolve.py`）・論文 ID・論文の文献表台帳（`paper-refs.py`）・entity 名寄せ・関心要約・survey のテーマ推薦と機械検査（`wiki-survey-recommend.py` / `wiki-survey-check.py`）・既存 survey の増補計画（`survey-augment-plan.py`）・原本 manifest の 1 件読み書き（`wiki-manifest.py`）・コンテキスト束・機械状態検査
 
 既存の一次ノート（`papers/` や `notes/` など）がある vault では、それらを ingest で書き換えない。wiki からは一方向参照だけにする。MOC への逆リンクは人間が承認したときだけ 1 件単位。
 

@@ -16,10 +16,10 @@
   - 検索と近傍: `retrieve.py` / `wiki-graph.py` / `wiki-related.py` / `wiki-clusters.py`
   - 編纂と再検証: `contradiction-index.py` / `recompile-queue.py` / `recompile-finalize.sh` / `claim-audit.py`
   - 台帳と名寄せ: `concept-candidates.py` / `concept-resolve.py` / `paper-ids.py` / `paper-refs.py` / `entity-resolve.py` / `wiki-manifest.py`
-  - サーベイ: `wiki-survey-recommend.py` / `wiki-survey-check.py`
+  - サーベイ: `wiki-survey-recommend.py` / `wiki-survey-check.py` / `survey-augment-plan.py`
   - 点検: `wiki-doctor.py` / `address-backfill.py`、関心の要約: `wiki-profile.py`
   - 外側の書誌照会: `bib-lookup.py`（OpenAlex / Crossref。撤回・出版社版の書誌・橋渡し文献・母集団の厚み）
-- 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）
+- 原本取得（`fetch-paper-pdf.sh` / `fetch-book.sh` / `fetch-slide-deck.sh`）と PDF の読み順テキスト抽出（`pdf-text.sh` / `pdf-reading-order.py` / `pdf-text-quality.py` / `pdf-ocr.sh`。OCR は macOS の Apple Vision）
 - 読み取り専用の Obsidian プラグイン `wiki-lens`
 
 入れない:

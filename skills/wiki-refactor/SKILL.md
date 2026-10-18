@@ -53,7 +53,7 @@ Every concept page must have this body shape (conventions §8):
 
 ## 子概念          ← hubs only
 
-## <topic 1>       ← free-form topic sections, named after the subject (2–7)
+## <topic 1>       ← free-form topic sections, named after the subject (1–7; 1 is fine when the page has ≤6 propositions)
 ## <topic 2>
 ## ...
 
@@ -74,8 +74,9 @@ Topic-section rules (conventions §8 主題節の規則):
 - Each top-level bullet is a **claim**: a bold sentence stating what is true. Comparisons ("A vs B shows X") are evidence, not claims — nest them as `- 根拠: [[@A]] — one line`, with `- 反証:` / `- 留保:` in the same nest.
 - No page self-reference ("既出", "本ページが集約してきた", "本頁に初めて追加する"). The comparison history lives in `wiki/log.md`.
 - Skeleton starting points: history axis (前史→転回→現在), problem-structure axis (問題→解決→限界), consensus axis (合意→論争→未解決). Prefer matching the section layout of sibling concepts in the same domain over the skeletons.
-- More than 7 topic sections → consider 親子化.
-- Single-source facts do not belong on a concept page (except the definition's own source).
+- More than 7 topic sections, two or more sections over 8 propositions, or more than 30 open questions → 親子化 (conventions §13 procedure).
+- Small pages: with ≤6 propositions total, one topic section is fine, and a 2-proposition section may stay when merging it would yield an "A と B" heading.
+- Single-source facts do not belong on a concept page (except the first paragraph of `## 定義`). Count sources per document (chapters of one book = 1 source). A proposition backed by one document moves to that source page; a page whose propositions all rest on one document is compressed (conventions §8 rule 6).
 
 Hub concepts (roughly 50KB+, or pages that already have child topics) keep `## 定義` and `## 子概念` as the map. Do not flatten child-level insights into the parent; move concrete cross-source arguments into child concept pages and link them from `## 子概念`.
 
@@ -100,9 +101,9 @@ Populate `sources` from source links used in `## 出典` or claim provenance. Qu
 Use these decisions consistently:
 
 - **統合**: Same concept split by alias, alternate translation, or same-source duplication. `concept-resolve.py plan --keep A --drop B` が `merge_kind` を返す。`alias-only`(drop 頁無し)は aliases を足して `decide --merged`。`inbox-append` は受信箱移動。`recompile-keep` は keep の再編纂と drop の `git rm` とリンク張り替えを同一コミットにする(対象ページは keep 1 枚。ingest 中の再編纂は許さない)。リンクは `[[STEM]]` / `[[wiki/concepts/STEM]]` / `[[STEM|表示]]` / `[[STEM#見出し]]` / `[[STEM^block]]` を `re.compile(r"\[\[(?:[^\]|#]*/)?%s(?:[|#^]|\])" % re.escape(STEM))` で拾う。`rg -F '[[STEM'` だけを安全確認にしない。
-- **親子化**: An umbrella concept contains stages, methods, evaluation design, implementation tactics, or domain variants. Keep the parent as a map with `## 子概念`; move concrete arguments into child concept pages. Parent `## 横断的知見` holds only observations that span children.
+- **親子化**: An umbrella concept contains stages, methods, evaluation design, implementation tactics, or domain variants. Keep the parent as a map with `## 子概念`; move concrete arguments into child concept pages. Parent `## 横断的知見` holds only observations that span children. Follow the 6-step procedure in conventions §13: move topic sections verbatim into children created with `wiki-page-write.py`, leave the parent with 定義 + 子概念 + cross-child propositions, retarget `[[parent#section]]` links, and commit the parent with its new children in one commit.
 - **分解**: A page exceeds roughly 100 lines or contains multiple independent cross-source arguments. Split into focused children and leave the parent with the definition, map, and synthesis.
-- **圧縮**: A concept is mostly single-source fact listing. Keep only the definition, cross-source insight if any, unresolved questions, and source pointers.
+- **圧縮**: A concept is mostly single-source fact listing (single document, counting a book's chapters as one). Keep only the definition, cross-source insight if any, unresolved questions, and source pointers. Before removing a proposition, confirm the source page already states it; if not, add it to the source page's body first. Park removed sections in `> [!note]- 編纂前の主題節 YYYY-MM`, log the operation, one page = one commit.
 - **補完**: A page is a lint stub, lacks required headings, has missing `sources`, stale indexes, weak related links, or unresolved wikilinks. Repair without inventing unsupported claims.
 - **再編纂 (recompile)**: The inbox (`## 未編纂の観察` / legacy `## 横断的知見`) holds 5+ observations, or the page has no topic section and 15+ observations (`wiki-concept-stats.py --compile-debt`). Fold the inbox into topic-section claims, rewrite the `## 定義` summary paragraph on hubs, and leave the three traces required by conventions §8 update rule 4 (git commit, `log.md` entry, folded originals parked in a collapsed `> [!note]- 編纂前の観察 YYYY-MM` callout). Full procedure: [`references/recompile.md`](references/recompile.md). This is the **only** decision that may rewrite, merge, reorder, or delete existing items; ingest never does.
 - **再検証 (claim audit)**: Sample bold propositions from topic sections and check that the cited source pages actually say what the proposition says (`supported` / `unsupported` / `not_in_source` / `source_missing` / `unclear`). Run it as the last recompile check on the page just recompiled, and periodically from lint on recently recompiled or random pages. Findings get a `- 留保: 再検証 YYYY-MM-DD — …` line or a weakened proposition, never a silent rewrite. Procedure: [`references/claim-audit.md`](references/claim-audit.md).

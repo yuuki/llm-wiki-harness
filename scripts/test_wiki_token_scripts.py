@@ -441,6 +441,31 @@ d.
 ## 出典
 """
 
+    def test_outline_counts_are_not_cut_by_budget(self):
+        # 大きいページでも節ごとの (N 命題) と合計は予算で切られない(異常検知で 72 → 60 と数え落とした)
+        sections = []
+        for k in range(6):
+            bullets = "\n".join(f"- **節 {k} の命題 {i}。" + "長い説明の文。" * 8 + "**\n  - 根拠: [[@2020__X__Y]] — 一行"
+                                for i in range(12))
+            sections.append(f"## 主題 {k}\n\n{bullets}\n")
+        self.write("wiki/concepts/Large.md", "---\ntitle: Large\n---\n\n# Large\n\n## 定義\n\nd.\n\n"
+                   + "\n".join(sections) + "\n## 未編纂の観察\n\n- obs (Source: [[@2020__X__Y]])\n\n## 出典\n")
+        proc = run_script("wiki-excerpt.py", ["wiki/concepts/Large.md", "--outline", "--budget-tokens", "400"],
+                          self.vault)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = proc.stdout
+        self.assertIn("total_propositions: 72\n", out)
+        counts = [int(n) for n in __import__("re").findall(r"\((\d+) 命題\)", out)]
+        self.assertEqual(counts, [12] * 6)
+        self.assertIn("## 未編纂の観察  (1 件)", out)
+        self.assertIn("## 出典", out)
+        self.assertIn("outline-truncated", out)
+        self.assertLess(len(out) // 3, 450)
+        full = run_script("wiki-excerpt.py", ["wiki/concepts/Large.md", "--outline", "--budget-tokens", "100000"],
+                          self.vault).stdout
+        self.assertNotIn("truncated", full)
+        self.assertEqual(full.count("\n- 節 "), 72)
+
     def test_functional_headings_and_inbox_placeholder_are_not_counted(self):
         # `## 参照` `## 関連ページ` は主題節に数えない。受信箱の案内文は観察に数えない。
         # `## 横断的知見(続き)` は受信箱の変種として受信箱に数える。stats と outline で同じ数になる。
@@ -484,6 +509,89 @@ d.
         self.assertEqual(section_kind("関連概念との違い"), "topic")
         self.assertEqual(section_kind("未解決の問い(追加)"), "questions")
         self.assertEqual(section_kind("横断的知見（追記）"), "inbox")
+
+    def test_status_reports_and_guidance_prose_are_placeholders(self):
+        sys.path.insert(0, str(SCRIPTS))
+        from wiki_sections import is_held_bullet, is_placeholder_bullet
+        for text in (
+            "- 未実施",
+            "- まだない",
+            "- 保留した観察: 0件",
+            "- 保留した観察: 0 件。",
+            "- 該当なし(新設時に、2 ソースの突き合わせを主題節へ直接記述した)。",
+            "- 単一ソースからの立ち上げのため横断的知見は蓄積中。",
+            "- 単一ソースのため、本節は次の取り込みで充実する予定。",
+            # 箇条書きでない案内の散文(斜体の囲みを含む)
+            "*(本 concept は現時点で単一ソースに基づく。今後別ソースの ingest 時に観察をここに積み増す。)*",
+            "*注: 本節は複数ソースが揃い次第拡充する。現時点は OSDI 2018 (Ray) の単一ソースに基づく。*",
+            "現時点では単一ソースのみ。2ソース目以降に横断的知見を積み増す。",
+        ):
+            self.assertTrue(is_placeholder_bullet(text), text)
+        for text in (
+            "- 未実施の比較が 3 件ある。RCD と MethodC は同じデータで比べられていない(Source: [[@A]])",
+            "- 精度: 92%",
+            "- 精度: 0",
+            "- 検知率: 0 件の見逃し(Source: [[@A]])",
+            "- *Ray* は動的タスクグラフを実装した(Source: [[@A]])",
+            "1 ソース目のため、横断的知見は今後の蓄積に委ねる。ただし CTR 予測の学習データはシステムの出力に依存する。",
+        ):
+            self.assertFalse(is_placeholder_bullet(text), text)
+        self.assertTrue(is_held_bullet("- 観察。(Source: [[@A]]) — 保留理由: 単一ソースで主題が立たない"))
+        self.assertFalse(is_held_bullet("- 観察。保留の理由は無い(Source: [[@A]])"))
+
+    def test_held_observations_do_not_count_toward_compile_debt(self):
+        held = "\n".join(f"- 観察 {i}。(Source: [[@2020__X__Y{i}]]) — 保留理由: 単一ソースで主題が立たない"
+                         for i in range(6))
+        page = ("---\ntitle: H\n---\n\n# H\n\n## 定義\n\nd.\n\n## 主題\n\n- **命題。**\n\n"
+                "## 未編纂の観察\n\n- 保留した観察: 0 件\n" + held + "\n- 新しい観察。(Source: [[@2021__X__Z]])\n\n"
+                "## 関連\n\n## 出典\n")
+        self.write("wiki/concepts/H.md", page)
+        proc = run_script("wiki-concept-stats.py", ["--compile-debt", "--page", "H"], self.vault)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        row = json.loads(proc.stdout)
+        self.assertEqual((row["inbox_bullets"], row["held_bullets"], row["in_debt"]), (1, 6, False))
+        # recompile-queue refresh も同じ数え方をする(保留だけでは負債に入らない)
+        (self.vault / ".vault-meta").mkdir(exist_ok=True)
+        res = run_script("recompile-queue.py", ["refresh"], self.vault)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout)["debt_pages"], 0)
+        # 保留でない観察が閾値に届けば負債に入り、キューは保留件数を別に持つ
+        more = "\n".join(f"- 追加の観察 {i}。(Source: [[@2021__X__Z]])" for i in range(4))
+        self.write("wiki/concepts/H.md", page.replace("## 関連", more + "\n\n## 関連"))
+        res = run_script("recompile-queue.py", ["refresh"], self.vault)
+        out = json.loads(res.stdout)
+        self.assertEqual(out["debt_pages"], 1)
+        self.assertEqual(out["held_bullets"], 6)
+        queue = json.loads((self.vault / ".vault-meta/recompile-queue.json").read_text(encoding="utf-8"))
+        entry = queue["entries"]["wiki/concepts/H.md"]
+        self.assertEqual((entry["inbox_bullets"], entry["held_bullets"]), (5, 6))
+        row = json.loads(run_script("wiki-concept-stats.py", ["--compile-debt", "--page", "H"], self.vault).stdout)
+        self.assertEqual((row["inbox_bullets"], row["held_bullets"]), (entry["inbox_bullets"], entry["held_bullets"]))
+
+    def test_concept_structure_problems(self):
+        good = ("---\ntitle: Good\nsources:\n  - \"[[@2020__X__Y]]\"\n---\n\n# Good\n\n## 定義\n\nd.\n\n"
+                "## 主題\n\n- **命題。**\n  - 根拠: [[@2020__X__Y]] — 一行\n\n## 出典\n\n- [[@2020__X__Y]]\n")
+        self.write("wiki/concepts/Good.md", good)
+        # `# タイトル` も `## 定義` も `## 出典` も無く、sources: が空なのに本文が [[@ を引く
+        self.write("wiki/concepts/Broken.md", "---\ntitle: Broken\nsources: []\n---\n\n## 主題\n\n"
+                   "- **命題。**\n  - 根拠: [[wiki/sources/@2020__X__Y]] — 一行\n\n## 参照ソース\n")
+        # sources: キー自体が無い。コードブロック内の `# ` は見出しに数えない
+        self.write("wiki/concepts/NoKey.md", "---\ntitle: NoKey\n---\n\n```\n# not a title\n```\n\n"
+                   "## 定義(暫定)\n\nd.\n\n## 出典\n\n- [[@2020__X__Y]]\n")
+        proc = run_script("wiki-concept-stats.py", ["--structure", "--json"], self.vault)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = {r["title"]: r["problems"] for r in json.loads(proc.stdout)}
+        self.assertNotIn("Good", rows)
+        self.assertEqual(rows["Broken"], ["missing_h1_title", "missing_definition", "missing_sources_section",
+                                          "empty_frontmatter_sources"])
+        self.assertEqual(rows["NoKey"], ["missing_h1_title", "empty_frontmatter_sources"])
+        self.assertIn("missing_h1_title 2", proc.stderr)
+        one = run_script("wiki-concept-stats.py", ["--structure", "--page", "Good"], self.vault)
+        self.assertEqual((one.returncode, json.loads(one.stdout)["problems"]), (0, []))
+        self.assertEqual(run_script("wiki-concept-stats.py", ["--structure", "--page", "Broken"],
+                                    self.vault).returncode, 1)
+        self.assertEqual(run_script("wiki-concept-stats.py", ["--structure", "--compile-debt"],
+                                    self.vault).returncode, 2)
 
     def test_prepend_hot_trims_max_entries_and_budget(self):
         old = "".join(

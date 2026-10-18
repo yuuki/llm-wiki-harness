@@ -31,7 +31,12 @@ the bold claim line of each top-level bullet inside topic sections
 functional sections. Functional = the fixed concept sections, their
 bracketed variants (横断的知見(続き)) and reference lists (参照, 関連ページ);
 see wiki_sections.py. The inbox count skips the empty-inbox placeholder line.
-No body text.
+No body text. The second line is `total_propositions: N`, the sum of the
+per-section `(N 命題)` counts, computed before any budget cut. Over
+--budget-tokens the outline keeps every `##` line with its count and drops
+claim / `###` lines from the end first, so the section counts and the total
+are never shortened by the budget (only a page whose `##` lines alone exceed
+the budget is cut by characters).
 
 Exit codes:
   0 — success
@@ -317,6 +322,9 @@ def claim_line(item_text, cap=90):
 
 def render_outline(rel, sections):
     out = [f"# outline: {rel}\n"]
+    total = sum(len(bullet_items(block.splitlines(keepends=True)))
+                for heading, block in sections if section_kind(heading) == KIND_TOPIC)
+    out.append(f"total_propositions: {total}\n")
     for heading, block in sections:
         lines = block.splitlines(keepends=True)
         items = bullet_items(lines)
@@ -357,6 +365,33 @@ def render_outline(rel, sections):
                 out.append(f"> [!{m.group(1)}]\n")
             i += 1
     return "".join(out)
+
+
+OUTLINE_TRUNCATION_NOTE = "<!-- outline-truncated: over --budget-tokens; dropped claim lines, kept every ## count -->\n"
+
+
+def fit_outline(out, budget):
+    """outline を予算に収める。`#` `##` 行と total_propositions 行は必ず残し、命題行と `###` 行を後ろから落とす。
+
+    節ごとの `(N 命題)` と合計は予算と無関係に出る。`##` 行だけで予算を超えるときに限り文字数で切る。
+    """
+    if estimate_tokens(out) <= budget:
+        return out, False
+    lines = out.splitlines(keepends=True)
+    keep = [ln.startswith(("# ", "## ", "total_propositions:")) for ln in lines]
+    used = estimate_tokens("".join(ln for ln, k in zip(lines, keep) if k) + OUTLINE_TRUNCATION_NOTE)
+    if used > budget:
+        skeleton = "".join(ln for ln, k in zip(lines, keep) if k)
+        return skeleton[: max(200, budget * 3)].rstrip() + "\n" + TRUNCATION_NOTE, True
+    for i, ln in enumerate(lines):
+        if keep[i]:
+            continue
+        cost = estimate_tokens(ln)
+        if used + cost > budget:
+            break
+        keep[i] = True
+        used += cost
+    return "".join(ln for ln, k in zip(lines, keep) if k) + OUTLINE_TRUNCATION_NOTE, True
 
 
 def first_paragraph_of_section(block):
@@ -466,10 +501,7 @@ def render_page(rel, text, args, fm_keys):
     by_heading = {h: block for h, block in sections}
 
     if args.outline:
-        out = render_outline(rel, sections)
-        if estimate_tokens(out) > args.budget_tokens:
-            return out[: max(200, args.budget_tokens * 3)].rstrip() + "\n" + TRUNCATION_NOTE, True
-        return out, False
+        return fit_outline(render_outline(rel, sections), args.budget_tokens)
 
     if args.sections is not None:
         named = [part.strip() for part in args.sections.split(",") if part.strip()]

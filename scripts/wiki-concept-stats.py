@@ -6,6 +6,7 @@ Usage:
                         [--promote-children] [--limit 20]
   wiki-concept-stats.py --compile-debt [--min-inbox 5] [--min-orphan-inbox 15] [--limit 20]
   wiki-concept-stats.py --compile-debt --page wiki/concepts/X.md
+  wiki-concept-stats.py --structure [--page X] [--limit 20]
 
 Stdout: JSON list of hub rows. --promote-children / --repair-children rewrite ## 子概念 from related
 pages that are not themselves hub-sized. Does not move body insights.
@@ -14,6 +15,10 @@ pages that are not themselves hub-sized. Does not move body insights.
 `## 横断的知見`) holds >= --min-inbox top-level bullets, or that have no
 topic section at all and >= --min-orphan-inbox bullets. Cited assertions that
 ingest left in `## 未解決の問い` (question_assertions) count toward the inbox.
+Bullets that a recompile deliberately left behind with a trailing
+`— 保留理由: …` are not counted toward the threshold (held_bullets reports them
+separately), so held observations alone never put a page back into debt.
+recompile-queue.py refresh reuses compile_metrics, so both count the same way.
 Sorted by inbox size.
 With --page, judges exactly one page (exact path or title, no substring match)
 and prints one row with `in_debt`; the exit code is 1 when it is in debt.
@@ -21,11 +26,20 @@ Every row (hub or debt) carries inbox_bullets / topic_sections / legacy_heading.
 Section kinds come from wiki_sections: reference-list headings (`## 参照`,
 `## 関連ページ`, …) are not topic sections, bracketed variants of the inbox
 (`## 横断的知見(続き)`) count as inbox, and the empty-inbox placeholder line
-(「現時点では単一ソースのため、今後追記する」) is not an observation.
+(「現時点では単一ソースのため、今後追記する」, or a bare status such as 「未実施」
+「保留した観察: 0 件」) is not an observation.
+
+--structure reports concept pages whose skeleton is broken (wiki-lint の構造検査。
+読み取り専用): `missing_h1_title` (no `# タイトル` line), `missing_definition`
+(no `## 定義`), `missing_sources_section` (no `## 出典`), and
+`empty_frontmatter_sources` (frontmatter `sources:` is missing or empty while
+the body cites `[[@…]]`). Stdout is a JSON list of {path, title, problems}
+for the pages with at least one problem; stderr gives the count per problem.
+With --page it prints one row (problems may be empty).
 
 Exit codes:
-  0 — success (with --page: the page has no compile debt)
-  1 — with --page: the page has compile debt
+  0 — success (with --page: the page has no compile debt / no structure problem)
+  1 — with --page: the page has compile debt / a structure problem
   2 — usage error
   3 — with --page: page not found
 """
@@ -46,9 +60,10 @@ from wiki_lock import page_lock
 from wiki_questions import is_stray_assertion
 # FIXED_HEADINGS / INBOX_HEADING / LEGACY_INBOX_HEADING / QUESTIONS_HEADING は他スクリプトが
 # このモジュール経由で参照するので残す(wiki_claims ほか)。
-from wiki_sections import (FIXED_HEADINGS, INBOX_HEADING, KIND_INBOX, KIND_QUESTIONS,  # noqa: F401
-                           KIND_TOPIC, LEGACY_INBOX_HEADING, QUESTIONS_HEADING, is_legacy_inbox_heading,
-                           is_placeholder_bullet, section_kind)
+from wiki_sections import (FIXED_HEADINGS, INBOX_HEADING, KIND_DEFINITION, KIND_INBOX,  # noqa: F401
+                           KIND_QUESTIONS, KIND_TOPIC, LEGACY_INBOX_HEADING, QUESTIONS_HEADING, base_heading,
+                           is_legacy_inbox_heading,
+                           is_held_bullet, is_placeholder_bullet, section_kind)
 
 VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().parent.parent).resolve()
 
@@ -255,20 +270,29 @@ def h2_sections(body):
 
 
 def inbox_bullet_count(block):
-    """受信箱の観察数。空欄の案内文(wiki_sections.is_placeholder_bullet)は観察ではないので数えない。"""
+    """受信箱の観察数。空欄の案内文(wiki_sections.is_placeholder_bullet)は観察ではないので数えない。
+    保留理由つきの観察(is_held_bullet)も負債の閾値には数えない(held_bullet_count が別に数える)。"""
     return sum(1 for line in block.splitlines()
-               if TOP_BULLET_RE.match(line) and not is_placeholder_bullet(line))
+               if TOP_BULLET_RE.match(line) and not is_placeholder_bullet(line) and not is_held_bullet(line))
+
+
+def held_bullet_count(block):
+    """再編纂が `— 保留理由:` を付けて受信箱に残した観察の数。"""
+    return sum(1 for line in block.splitlines()
+               if TOP_BULLET_RE.match(line) and not is_placeholder_bullet(line) and is_held_bullet(line))
 
 
 def compile_metrics(body):
-    """inbox_bullets / topic_sections / legacy_heading / question_assertions for one concept body.
+    """inbox_bullets / held_bullets / topic_sections / legacy_heading / question_assertions for one concept body.
 
     節の分類は wiki_sections.section_kind に従う。`横断的知見(続き)` のような受信箱の変種は受信箱に、
     `## 参照` `## 関連ページ` のような参照一覧の節はどこにも数えない(主題節ではない)。
     question_assertions は `## 未解決の問い` に紛れた出典付きの断定(wiki_questions の判定)。
     ingest が問い節を第二の受信箱にした分で、再編纂が主題節へ畳む対象なので負債に数える。
+    held_bullets は受信箱の保留理由つきの観察で、inbox_bullets には含めない(負債に数えない)。
     """
     inbox = 0
+    held = 0
     topics = 0
     legacy = False
     question_assertions = 0
@@ -276,6 +300,7 @@ def compile_metrics(body):
         kind = section_kind(heading)
         if kind == KIND_INBOX:
             inbox += inbox_bullet_count(block)
+            held += held_bullet_count(block)
             if is_legacy_inbox_heading(heading):
                 legacy = True
         elif kind == KIND_QUESTIONS:
@@ -283,7 +308,7 @@ def compile_metrics(body):
                                        if line.startswith(("- ", "* ")) and is_stray_assertion(line))
         elif kind == KIND_TOPIC:
             topics += 1
-    return {"inbox_bullets": inbox, "topic_sections": topics, "legacy_heading": legacy,
+    return {"inbox_bullets": inbox, "held_bullets": held, "topic_sections": topics, "legacy_heading": legacy,
             "question_assertions": question_assertions}
 
 
@@ -307,6 +332,56 @@ def compile_debt_row(path, text, min_inbox, min_orphan_inbox):
     row.update(metrics)
     row["in_debt"] = in_compile_debt(metrics, min_inbox, min_orphan_inbox)
     return row
+
+
+H1_RE = re.compile(r"^# \S", flags=re.M)
+BODY_CITATION_RE = re.compile(r"\[\[(?:[^\]|#]*/)?@")
+FENCE_RE = re.compile(r"^(```|~~~).*?^\1[^\n]*$", flags=re.M | re.S)
+STRUCTURE_PROBLEMS = ("missing_h1_title", "missing_definition", "missing_sources_section",
+                      "empty_frontmatter_sources")
+
+
+def structure_problems(text):
+    """concept ページの骨格の欠落。STRUCTURE_PROBLEMS のうち当たるものを順に返す。"""
+    fm, body = split_frontmatter(text)
+    plain = FENCE_RE.sub("", body)
+    problems = []
+    if not H1_RE.search(plain):
+        problems.append("missing_h1_title")
+    headings = [h for h, _ in h2_sections(plain)]
+    if not any(section_kind(h) == KIND_DEFINITION for h in headings):
+        problems.append("missing_definition")
+    if not any(base_heading(h) == "出典" for h in headings):
+        problems.append("missing_sources_section")
+    sources = fm.get("sources")
+    empty = sources is None or (isinstance(sources, list) and not [x for x in sources if str(x).strip()]) \
+        or (isinstance(sources, str) and not sources.strip())
+    if empty and BODY_CITATION_RE.search(plain):
+        problems.append("empty_frontmatter_sources")
+    return problems
+
+
+def structure_row(path, text):
+    fm, _ = split_frontmatter(text)
+    title = fm.get("title")
+    if not title or isinstance(title, list):
+        title = path.stem
+    return {"path": path.resolve().relative_to(VAULT_ROOT.resolve()).as_posix(),
+            "title": str(title).strip() or path.stem, "problems": structure_problems(text)}
+
+
+def scan_structure():
+    rows = []
+    for path in list_concept_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        row = structure_row(path, text)
+        if row["problems"]:
+            rows.append(row)
+    rows.sort(key=lambda r: r["path"])
+    return rows
 
 
 def resolve_concept_page(page):
@@ -459,7 +534,11 @@ def main(argv=None):
                         help="Inbox bullets that flag compile debt (default 5).")
     parser.add_argument("--min-orphan-inbox", type=int, default=DEFAULT_MIN_ORPHAN_INBOX,
                         help="Inbox bullets that flag debt when the page has no topic section (default 15).")
-    parser.add_argument("--page", help="With --compile-debt: judge one page (exact path or title). Exit 1 if in debt.")
+    parser.add_argument("--structure", action="store_true",
+                        help="List concept pages missing # title / ## 定義 / ## 出典, or with empty frontmatter "
+                             "sources: while the body cites [[@...]].")
+    parser.add_argument("--page", help="With --compile-debt / --structure: judge one page (exact path or title). "
+                                       "Exit 1 if in debt / broken.")
     args = parser.parse_args(argv)
 
     if args.min_bytes < 0 or args.min_lines < 0:
@@ -472,9 +551,28 @@ def main(argv=None):
         log("ERR: --min-inbox and --min-orphan-inbox must be >= 0")
         return EXIT_USAGE
 
-    if args.page and not args.compile_debt:
-        log("ERR: --page requires --compile-debt")
+    if args.page and not (args.compile_debt or args.structure):
+        log("ERR: --page requires --compile-debt or --structure")
         return EXIT_USAGE
+
+    if args.structure:
+        if args.compile_debt or args.promote_children or args.repair_children:
+            log("ERR: --structure cannot be combined with --compile-debt / --promote-children / --repair-children")
+            return EXIT_USAGE
+        if args.page:
+            path = resolve_concept_page(args.page)
+            if path is None:
+                log(f"ERR: page not found: {args.page}")
+                return EXIT_MISSING
+            row = structure_row(path, path.read_text(encoding="utf-8"))
+            print(json.dumps(row, ensure_ascii=False, indent=2))
+            return EXIT_IN_DEBT if row["problems"] else EXIT_OK
+        rows = scan_structure()
+        counts = {p: sum(1 for r in rows if p in r["problems"]) for p in STRUCTURE_PROBLEMS}
+        log(f"wiki-concept-stats: {len(rows)} of {len(list_concept_files())} concept page(s) with structure "
+            "problems (" + ", ".join(f"{k} {v}" for k, v in counts.items()) + f"); showing {min(len(rows), args.limit)}")
+        print(json.dumps(rows[: args.limit], ensure_ascii=False, indent=2))
+        return EXIT_OK
 
     if args.compile_debt:
         if args.promote_children or args.repair_children:
@@ -510,6 +608,7 @@ def main(argv=None):
             "has_child_section": row["has_child_section"],
             "child_candidates": row["child_candidates"],
             "inbox_bullets": row["inbox_bullets"],
+            "held_bullets": row["held_bullets"],
             "topic_sections": row["topic_sections"],
             "legacy_heading": row["legacy_heading"],
         })

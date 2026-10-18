@@ -154,6 +154,27 @@ class DoctorTest(unittest.TestCase):
             self.assertIn("address の無い知識ページ 1 頁", by["address_counter"]["detail"])
             self.assertIn("address-backfill.py", by["address_counter"]["fix"])
 
+    def test_address_after_long_frontmatter_is_seen(self):
+        # sources が長いと address 行が先頭 1500 字より後ろに来る。欠落とも重複漏れともしない。
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            make_vault(root)
+            many = "".join(f'  - "[[@2026__X__Source {i:03d} with a fairly long title]]"\n' for i in range(60))
+            (root / "wiki/concepts/Beta.md").write_text(
+                "---\ntitle: Beta\ntype: concept\nsources:\n" + many + "address: c-000001\n---\n# Beta\n",
+                encoding="utf-8")
+            doc = import_script("wiki-doctor", root)
+            ctx = {"pages": list(doc.wiki_pages()),
+                   "cluster_pages": list(doc.cluster_pages()),
+                   "address_pages": list(doc.address_pages())}
+            rep = doc.Report()
+            doc.check_address_counter(rep, ctx)
+            by = {r["check"]: r for r in rep.rows}
+            # Alpha(make_vault)も c-000001 なので、長い frontmatter の address も数えれば重複になる。
+            self.assertEqual(by["address_counter"]["status"], "FAIL")
+            self.assertIn("重複", by["address_counter"]["detail"])
+            self.assertNotIn("address の無い", by["address_counter"]["detail"])
+
     def test_unknown_check_is_usage_error(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td).resolve()

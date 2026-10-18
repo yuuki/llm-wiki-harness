@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -190,6 +191,35 @@ class RecompileQueueTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, err)
         entries = self.queue()["entries"]
         self.assertEqual([entries[f"wiki/concepts/P{i}.md"]["state"] for i in range(8)], ["done"] * 8)
+
+    def test_keys_are_nfc_and_nfd_duplicates_are_merged_on_load(self):
+        name = "異常検知のグラフ"  # 濁点を含むので NFD と NFC で字面が違う
+        nfc_key = f"wiki/concepts/{name}.md"
+        nfd_key = unicodedata.normalize("NFD", nfc_key)
+        self.assertNotEqual(nfc_key, nfd_key)
+        self.write(f"wiki/concepts/{unicodedata.normalize('NFD', name)}.md", concept(name, inbox=7))
+        queue = {"version": 1, "updated_at": None, "entries": {
+            nfd_key: {"state": "rejected", "first_seen": "2026-09-01", "inbox_bullets": 7,
+                      "attempts": [{"date": "2026-09-02", "state": "rejected", "by": "human", "reason": "粒度"}]},
+            nfc_key: {"state": "in_progress", "first_seen": "2026-09-05", "inbox_bullets": 7,
+                      "attempts": [{"date": "2026-09-06", "state": "in_progress", "by": "agent", "reason": ""}]},
+        }}
+        (self.vault / ".vault-meta/recompile-queue.json").write_text(
+            json.dumps(queue, ensure_ascii=False), encoding="utf-8")
+        shown = json.loads(self.run_ok("show", unicodedata.normalize("NFD", name)).stdout)
+        self.assertEqual(shown["path"], nfc_key)
+        self.assertEqual(shown["state"], "in_progress")
+        self.assertEqual(shown["rejections"], 1)
+        self.assertEqual(shown["first_seen"], "2026-09-01")
+        self.run_ok("mark", unicodedata.normalize("NFD", name), "--state", "done")
+        self.run_ok("refresh")
+        keys = list(self.queue()["entries"])
+        self.assertEqual([k for k in keys if name in unicodedata.normalize("NFC", k)], [nfc_key])
+        self.assertTrue(all(unicodedata.normalize("NFC", k) == k for k in keys))
+        entry = self.queue()["entries"][nfc_key]
+        # NFD のファイル名から見つけた負債も NFC のキーに戻る(inbox 7 件なので done から再入する)
+        self.assertEqual([a["state"] for a in entry["attempts"]], ["rejected", "in_progress", "done", "reentered"])
+        self.assertFalse(entry.get("missing"))
 
 
 if __name__ == "__main__":

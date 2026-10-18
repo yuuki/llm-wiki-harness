@@ -33,7 +33,7 @@ python3 scripts/wiki-survey-check.py stats     # 行数、sources 本数、図�
 
 母集団の妥当性はフェーズ 1 のゲートで判断する。薄いときの行き先は `autoresearch` と `wiki-ingest-*` であって、wiki-query へ戻さない。戻すと往復になる。
 
-既存ページへ新しい source を織り込む依頼(「〜に X を追加して」「〜を増補して」)は、新規編纂ではなく [増補](#既存ページの増補) の手順で扱う。
+既存ページへ新しい source を織り込む依頼(「〜に X を追加して」「〜を増補して」)は、新規編纂ではなく [増補](#既存ページの増補) の手順で扱う。複数ページをまとめて増補するなら [一括増補](#一括増補) の手順を使う。
 
 ## 実例の使い方
 
@@ -57,7 +57,7 @@ python3 scripts/wiki-survey-check.py stats     # 行数、sources 本数、図�
 5. `wiki-query` skill が検索経路(`retrieve.py` から `wiki-excerpt.py`)の正本である。本 skill は同じ経路を使い、wiki-query が deep でも扱いきれない長編編纂を引き取る。
 6. `scripts/wiki-survey-check.py` が機械検査の正本である(フェーズ 6)。検査の中身を本ファイルへ書き写さず、`python3 scripts/wiki-survey-check.py --help` を見る。
 
-骨格は [`references/skeletons.md`](references/skeletons.md)、subagent へ渡すブリーフは [`references/subagent-brief.md`](references/subagent-brief.md)、図表転載は [`references/figures.md`](references/figures.md) が正本である。同じ規則を本ファイルへ書き写さない。
+骨格は [`references/skeletons.md`](references/skeletons.md)、subagent へ渡すブリーフは [`references/subagent-brief.md`](references/subagent-brief.md)、図表転載は [`references/figures.md`](references/figures.md) が正本である。[一括増補](#一括増補)の subagent には、これらの要点をまとめた [`references/augment.md`](references/augment.md) だけを渡す。同じ規則を本ファイルへ書き写さない。
 
 ---
 
@@ -277,6 +277,35 @@ python3 scripts/wiki-retrieve-refresh.py --pages "wiki/surveys/<タイトル>.md
 7. **図表**。新 source に本文の主張の証拠になる図があれば、フェーズ 5 と同じ基準で実見して挿入する。章内の図番号を詰め直す。
 
 増補が座標系そのものを組み替える規模(軸を 2 本以上足す、章の半分に触れる)なら、増補ではなく改稿である。改稿はフェーズ 2 から回し、`question` を保ったまま本文を作り直す。
+
+### 一括増補
+
+「全サーベイを増補して」のように複数ページをまとめて増補するときの手順である。1 ページずつの増補を subagent に並べるだけだと、各体が候補探索、共有 source の精読、本 skill と参照文書の通読をそれぞれ繰り返す。2026-10-18 に 32 ページを 1 ページ 1 体で回したときは、合計がおよそ 1,000 万トークンになった。以下の手順は、その重複をメイン文脈で 1 回に畳むためのものである。
+
+状態は `.vault-meta/survey-augment/` に置く(gitignore 済み、セッションをまたいで残る)。scratchpad や `$TMPDIR` には置かない。セッションが中断して scratchpad が消えると、transcript を読み直して状態を復元することになり、それ自体が大量のトークンを使う。
+
+```
+.vault-meta/survey-augment/
+  plan.json, plan.md   # 手順 2 の出力
+  queue.json           # ページ → pending | running | done | logged | skipped | failed
+  cards/<source>.md    # 手順 3 の主張カード
+  reports/<ページ>.md  # 手順 4 の subagent 報告(形式は references/augment.md §5)
+```
+
+**再開するときは、transcript を読まずにこのディレクトリだけを見る**。`queue.json` で残りのページを特定し、`done` で log 未記入のものは `reports/` から log を書く。
+
+1. **事前点検**。並列投入の前に、全体を止める障害をメイン文脈で先に潰す。
+   - 画像の Read が通るか。`wiki/sources/_attachments/` の PNG を 1 枚 Read して確かめる。hook のタイムアウトなどで失敗するなら、増補は図表なしで回し、図表は全ページ分を後から別パス(フェーズ 5 の手順、ログは `(図表転載)`)でまとめて行うと決めてから進む。各体に Read を再試行させない。
+   - 新 source が検索索引に入っているか。手順 2 の `plan.md` の「索引」行で見る。未登録があれば、その source を `python3 scripts/wiki-retrieve-refresh.py --pages <path...> --no-llm` で登録してから先へ進む。
+2. **経路を決める**。`python3 scripts/survey-augment-plan.py` を実行し、stdout(= `plan.md`)だけを見る。ページごとの最終増補日はログの `wiki-survey |` と `query* |` の見出しから取っており、見取り図・図表転載・整文のような保守エントリと frontmatter の `updated` は使っていない。候補が 0 件のページは対象から外す(`action: skip`)。候補には関連度が付いているが、リンク構造だけで計算した推定である。明らかに筋違いの組み合わせはここで外し、閾値は `--min-score` と `--top-k` で調整する。照合できなかった `wiki-survey` 見出しが出たら、ページ名の表記揺れなので確認する。`queue.json` を対象ページ全件 `pending` で作る。
+3. **共有 source の主張カード**。`plan.md` の「共有 source」(2 ページ以上の候補)は、1 本につき 1 回だけ精読して `cards/<source の basename>.md` に書く。精読 subagent に渡すなら [`references/subagent-brief.md`](references/subagent-brief.md) §1 の抽出項目(著者と所属、主張、機構、評価条件つきの数値、データの出自、限界、図表の埋め込みパスと原本番号)をそのまま使い、各項目に `(Source: [[...]])` を付けさせる。カードの先頭には、候補になったサーベイの一覧を書く。カードは素材であって本文ではないので、整文は不要である。
+4. **ページごとの増補**。1 ページに 1 体を投入する。**同時に走らせるのは 8 体まで**(マシン負荷のためのユーザー指示)。ブリーフには次だけを入れる。
+   - [`references/augment.md`](references/augment.md) を読め、という指示(SKILL.md 本体、figures.md、japanese-style.md、japanese-tech-writing を読ませない。augment.md がその要点と正本へのリンクを持っている)。
+   - 担当ページのパス、候補 source と関連度、使うカードのパス。
+   - 担当ページ以外を編集しないこと、log と index と hot を触らないこと、報告を `reports/` に書くこと。
+   投入時に `queue.json` を `running` に、報告が届いたら `done` にする。報告の形式が欠けていたら(augment.md §5 の項目を数える)素材として採らず、再投入する。`needs-rewrite` が返ったページは一括の対象から外し、改稿として別に扱う。
+5. **ログはページごとに 1 エントリ**。報告ごとに `python3 scripts/wiki-catalog.py prepend-log` で `## [YYYY-MM-DD] wiki-survey | <ページの basename>(一括増補)` を書き、更新ページ、追加 source、触れた章、座標系への配置、図表、検証結果を報告から転記する。書いたら `queue.json` を `logged` にする。全ページを 1 エントリにまとめない。見出しにページ名が無いと、次回の `survey-augment-plan.py` がそのページの最終増補日を取れない。
+6. **仕上げ**。手順 1 で図表を後回しにしたなら、ここで別パスとして行う。最後に `python3 scripts/wiki-retrieve-refresh.py --pages <更新した全ページ> --no-llm` を 1 回だけ実行し、`python3 scripts/survey-augment-plan.py --no-write` を再実行して、対象にしたページの最終増補日が今日になっていることを確かめる(手順 5 の見出しがページと照合できたことの確認になる)。コミットはページごと、または一括で、更新したパスだけを `git commit -- <パス>` で渡す。
 
 ---
 

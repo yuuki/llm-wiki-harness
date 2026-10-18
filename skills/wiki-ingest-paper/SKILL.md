@@ -89,10 +89,27 @@ bash scripts/fetch-paper-pdf.sh "https://arxiv.org/abs/2501.01234"
 ヘルパーがやること:
 1. **入力解決**: `arxiv.org/abs|pdf` URL・裸の arXiv ID(`2501.01234`)→ `https://arxiv.org/pdf/<id>.pdf`。その他 https URL はそのまま。ローカル `.pdf` はコピー。
 2. **ダウンロード → 検証**: `.raw/papers/<slug>.pdf` に保存し、先頭 `%PDF` シグネチャを確認。ペイウォール/HTML を掴んだら PDF を消して失敗する(誤った原本を残さない)。
-3. **テキスト抽出**: `pdftotext -layout` で `.raw/papers/<slug>.txt` を生成。これは**取り込み時に Read するため**のもので、wiki にそのまま貼らない。
-4. **画像抽出**: Mozilla `pdf.js`(`scripts/extract-paper-images.mjs`)で各ページを読み、`.raw/papers/<slug>/images/` に画像を保存する。operator list から取れる埋め込み raster 画像は `image-<page>-<seq>.png` として残す。ヘルパーが中間生成した `page-<page>.png` は、**この実行が作った images ディレクトリだけ**を対象に fetch が抽出直後に掃除する。エージェントは `page-*.png` を消さない。`find` / `python -c` で `images.json` を直さない。
-5. **メタ情報の手掛かり**: `arxiv_id` / `arxiv_html` / `year_hint`(arXiv ID から) / `pages` / `pdfinfo` のタイトル / `images_dir` / `images_count`(掃除後) / `image_manifest` / `figure_ids` / `figure_id_counts` を返す。
-6. **既存 source の照合**: arXiv ID または URL(doi.org を含む)を `scripts/paper-ids.py check` に当て、一致した既存ページを `existing_sources=` で返す(上記)。ローカル PDF は照合しない。
+3. **テキスト抽出**: `scripts/pdf-text.sh`(poppler の語座標を段ごとに並べ替える。失敗したら `pdftotext` の既定モード)で `.raw/papers/<slug>.txt` を**読み順**に生成する。二段組みは左段を上から読み、次に右段を読む順に並ぶ。これは**取り込み時に Read するため**のもので、wiki にそのまま貼らない。表の行の並びを確かめたいときだけ、`pdftotext -layout` 版の `.raw/papers/<slug>.layout.txt`(`layout_txt=`)を `rg` で引く。`-layout` 版を通読しない。左右の段の行が 1 行に並んでおり、隣の段の数値を文に結び付ける取り違えのもとになる。上付き文字は `^` を付けて出る(`10^3`)。
+4. **抽出品質の判定と OCR**: `scripts/pdf-text-quality.py` が `.layout.txt`(pdftotext の出力)を判定し、`text_quality=ok|sparse|none|glyph-loss` を返す。`ok` 以外なら `scripts/pdf-ocr.sh`(Apple Vision、300 dpi)で `.raw/papers/<slug>.ocr.txt` を作り、`ocr_txt=` と `ocr_status=` を返す(下の「抽出品質と OCR」)。
+5. **画像抽出**: Mozilla `pdf.js`(`scripts/extract-paper-images.mjs`)で各ページを読み、`.raw/papers/<slug>/images/` に画像を保存する。operator list から取れる埋め込み raster 画像は `image-<page>-<seq>.png` として残す。ヘルパーが中間生成した `page-<page>.png` は、**この実行が作った images ディレクトリだけ**を対象に fetch が抽出直後に掃除する。エージェントは `page-*.png` を消さない。`find` / `python -c` で `images.json` を直さない。
+6. **メタ情報の手掛かり**: `arxiv_id` / `arxiv_html` / `year_hint`(arXiv ID から) / `pages` / `pdfinfo` のタイトル / `images_dir` / `images_count`(掃除後) / `image_manifest` / `figure_ids` / `figure_id_counts` を返す。
+7. **既存 source の照合**: arXiv ID または URL(doi.org を含む)を `scripts/paper-ids.py check` に当て、一致した既存ページを `existing_sources=` で返す(上記)。ローカル PDF は照合しない。
+
+### 抽出品質と OCR(推測で埋めない)
+
+抽出が壊れた `.txt` を読むと、欠けた部分を推測や訓練知識で埋めてしまう。実例: VL2(SIGCOMM 2009)は数字の字形が私用領域にあり `.txt` から全数字が消えていて、source ページに原文の 2.7 TB が 2.1TB と書かれた。BPF(USENIX 1993)はテキスト層が無く、本文が訓練知識から再構成された。fetch の `text_quality=` で扱いを分ける。
+
+| `text_quality` | 状態 | 読む入力 |
+|---|---|---|
+| `ok` | 正常 | `.raw/papers/<slug>.txt` |
+| `none` | テキスト層が無い(スキャン PDF) | `ocr_txt=` の `.raw/papers/<slug>.ocr.txt` |
+| `sparse` | 一部のページにしかテキストが無い | `ocr_txt=` |
+| `glyph-loss` | 数字・記号が字形ごと抜けている(PUA・置換文字) | `ocr_txt=`。表の行の並びは `.layout.txt` で補ってよいが、数字は `ocr_txt` から写す |
+
+- `ocr_status=failed` なら、サンドボックス無効化で `bash scripts/pdf-ocr.sh .raw/papers/<slug>.pdf .raw/papers/<slug>.ocr.txt` を再実行する(Vision はサンドボックス内では動かない)。それでも作れなければ、PDF のページ画像を `Read`(`pages` 指定、20 ページずつ)で目視して読む。**どちらもできなければ取り込みを止め、`Deferred: text layer unusable` と報告する。訓練知識・記憶・abs ページの要約から本文を書かない。**
+- OCR を読んだら、frontmatter `sources:` に `"[[.raw/papers/<slug>.ocr.txt]]"` を足す(`claim-audit.py` が数値照合に使う)。
+- OCR の文字誤り率は英文で 0.2〜0.3% 程度で、数字の誤読はゼロではない(`VL2` が `VLa` になる類)。**本文の要の数値(abstract・主結果・表の見出し値)は、PDF のそのページを `Read` で目視して確かめる。** OCR と目視が食い違えば目視を採る。
+- source ページの書誌の箇条に `- 本文テキスト: OCR(Apple Vision。抽出品質 <text_quality>)` の 1 行を置く。
 
 ### サンドボックスとネットワーク
 
@@ -259,7 +276,7 @@ python3 scripts/wiki-manifest.py put ".raw/papers/<slug>.pdf" --json '{"hash": "
 
 ## Step 1: source ページを作る(`wiki/sources/`)
 
-論文を読み切ってから書く。`.raw/papers/<slug>.txt` を**全部**読む(斜め読みしない)。長い論文は分割して読む。abstract と書誌は HTML 版/abs ページで裏取りする。
+論文を読み切ってから書く。`.raw/papers/<slug>.txt`(`text_quality` が `ok` 以外なら `<slug>.ocr.txt`。Step 0「抽出品質と OCR」)を**全部**読む(斜め読みしない)。長い論文は分割して読む。abstract と書誌は HTML 版/abs ページで裏取りする。
 
 ### ファイル名(`@` プレフィックス必須)
 
@@ -291,6 +308,7 @@ related: []
 sources:
   - "[[.raw/papers/<slug>.pdf]]"   # 取り込んだ PDF 原本
   - "[[.raw/papers/<slug>.txt]]"   # 抽出テキスト
+  - "[[.raw/papers/<slug>.ocr.txt]]"   # OCR テキスト(text_quality != ok のときだけ)
   - "[[.raw/papers/<slug>/images/images.json]]"   # pdf.js 画像抽出 manifest
 source_type: paper
 author: "1st Author ほか"
@@ -572,7 +590,7 @@ python3 scripts/wiki-append.py --batch "$TMPDIR/appends.json"   # --dry-run で�
 - 全主張を PDF 本文・図表・abstract のいずれかに遡及。どれにも遡れないものは創作 → 削除か、出典が支える内容に置換。
 - 数値・固有名は PDF 本文/図表で裏取り。文字起こし的なノイズ(HTML 版の崩れ等)があれば該当文に括弧で注記。
 - 推定値(arXiv ID から導いた発行年など)は推定と分かるよう報告。
-- 数値は機械照合する。source ページを書いた直後に `python3 scripts/claim-audit.py numbers --source-page "wiki/sources/@YYYY__SOURCE__Title.md"`、concept への追記の前に spec をファイルへ書いて `python3 scripts/claim-audit.py numbers --spec <spec.json>` を打つ。終了 1 の `missing` は `rg -n -C2 '<数値>' ".raw/papers/<slug>.txt"` で原文を引いて直すか消す(PDF は開かない)。観察が既存 source の数値を述べるなら、その行にその source の wikilink を置く。和・比のような導出値は導出と分かる書き方にする。`caption_missing`(図から読んだ数値)は目視済みなら残してよい。手順の詳細は [`references/subagent-brief.md`](references/subagent-brief.md) の「数値の照合」。
+- 数値は機械照合する。source ページを書いた直後に `python3 scripts/claim-audit.py numbers --source-page "wiki/sources/@YYYY__SOURCE__Title.md"`、concept への追記の前に spec をファイルへ書いて `python3 scripts/claim-audit.py numbers --spec <spec.json>` を打つ。終了 1 の `missing` は `rg -n -C2 '<数値>' ".raw/papers/<slug>.txt"`(OCR を読んだ論文は `<slug>.ocr.txt`)で原文を引いて直すか消す(PDF は開かない。OCR 論文の要の数値だけは目視で確かめる)。観察が既存 source の数値を述べるなら、その行にその source の wikilink を置く。和・比のような導出値は導出と分かる書き方にする。`caption_missing`(図から読んだ数値)は目視済みなら残してよい。手順の詳細は [`references/subagent-brief.md`](references/subagent-brief.md) の「数値の照合」。
 - 報告は階層化: ✅ 完全に出典裏付けあり / ⚠️ 不確実・要注記 / ℹ️ 推定。明らかな修正は適用し、判断を要する点はユーザーに上げる。
 
 ### 図表網羅チェック(必須)

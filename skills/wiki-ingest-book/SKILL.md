@@ -54,6 +54,7 @@ description: "Book-specialized wiki ingest. Use when the source is a book: a who
 | **(a) 書籍全体 PDF** | ローカル PDF / PDF URL | Step 0 で `fetch-book.sh` → 章分割 → Step 0.3 で章リスト確定 → 全章 fan-out。book entity を新規作成 |
 | **(b) 章別ウェブページ群** | SRE Book 型の章 URL リスト・目次ページ | `fetch-book.sh` は使わない。各章を defuddle で clean markdown 化して `.raw/books/<slug>/chapters/ch-NN.md` に保存。URL リスト = 章リストなので目次検出は不要 |
 | **(c) 書籍の断片(1 章分)** | 1 章分の PDF・テキスト・単一の章 URL | **分割しない。source は 1 枚**。book entity は作成または更新(下記) |
+| **(d) Kindle 本** | ASIN・Amazon の商品 URL | 先に [`kindle-export-book`](../kindle-export-book/SKILL.md) が撮影・OCR・図の切り出し・章分割をして `.raw/books/<slug>/chapters/ch-NN.md` を作る。以降は (b) と同じ流れ(`fetch-book.sh` と Step 0.5 の画像抽出は使わない) |
 
 **(c) 断片の判定基準**: ユーザーが「第 N 章」「chapter」と明示している / PDF が概ね 60 ページ未満 / 目次検出が単一章相当しか返さない / ファイル名・冒頭に "Chapter N" を含む。曖昧なら `AskUserQuestion` で「書籍全体として章分割するか、この断片 1 枚として扱うか」を確認する。
 
@@ -87,7 +88,7 @@ bash scripts/fetch-book.sh "<pdf-url|local-pdf-path>" "<slug>"
 
 ヘルパーがやること:
 1. **入力解決とダウンロード**: URL は `curl` で取得、ローカル PDF はコピー。先頭 `%PDF` シグネチャを検証し、HTML/エラーページを原本として残さない。既存 `.raw/books/<slug>/` にファイルがあれば停止する(`--force` でのみ上書き)。
-2. **テキスト抽出**: `pdftotext -layout` で全文 `<slug>.txt` を生成。
+2. **テキスト抽出**: `scripts/pdf-text.sh`(poppler の語座標を段ごとに並べ替える。失敗したら `pdftotext` の既定モード)で全文 `<slug>.txt` を読み順に生成する。二段組みは左段→右段の順に並ぶ。`-layout` は左右の段の行を 1 行に並べるので使わない。
 3. **章検出**: PyMuPDF(`uv run --with pymupdf`)の `get_toc()` から章境界を決定。アウトラインが無い PDF は本文ページ先頭の章見出し(`Chapter N` / `第N章`)走査にフォールバックする。検出結果と全アウトラインは `toc.txt` に残る。
 4. **章分割**: 章ごとにページ範囲テキストを `chapters/ch-NN.txt`(2 桁ゼロ埋め)へ書き出す。
 
@@ -96,7 +97,9 @@ bash scripts/fetch-book.sh "<pdf-url|local-pdf-path>" "<slug>"
 ```
 .raw/books/<slug>/
   <slug>.pdf            # 全体 PDF(入力 a のみ。断片 c は chapters/ 配下に置く)
-  <slug>.txt            # pdftotext -layout の全文
+  <slug>.txt            # 読み順の全文(scripts/pdf-text.sh)
+  <slug>.layout.txt     # pdftotext -layout の全文。表の行の並びを見るときだけ rg で引く。通読しない
+  layout/ch-01.txt      # 2026-10-14 に読み順版へ作り直した章の旧版(-layout)。chapters/ に置くと ch-*.txt のグロブに掛かるので分けた
   toc.txt               # 検出目次(outline| 行と chapter| 行)
   chapters/ch-01.txt    # 章別テキスト(b は .md、c の断片 PDF は .pdf + .txt)
   images/images.json    # extract-paper-images.mjs の出力(Step 0.5)

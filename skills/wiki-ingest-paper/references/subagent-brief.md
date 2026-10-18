@@ -30,6 +30,8 @@ ACM / IEEE の PDF をブラウザで落とした論文は、オーケストレ�
 
 fetch が `page-*.png` の掃除まで行う。手で `find` / `python -c` しない。保持されるのは `image-*.png` と `images.json` だけ。`scripts/allocate-address.sh` は直接実行しない(採番は `wiki-page-write.py` の内側)。
 
+fetch の出力の `text_quality=` が `ok` 以外なら、本文は `.txt` ではなく `ocr_txt=`(`<slug>.ocr.txt`)を読み、`sources:` に足す。`ocr_status=failed` ならサンドボックス無効化で `bash scripts/pdf-ocr.sh .raw/papers/<slug>.pdf .raw/papers/<slug>.ocr.txt` を再実行し、それでも無理なら PDF をページ指定で `Read` して目視で読む。どれもできなければ止まり、`Deferred: text layer unusable` と報告する。**訓練知識や記憶から本文を書かない。** OCR 論文では要の数値(abstract・主結果)を PDF のそのページの目視で確かめる。以下の `<slug>.txt` は OCR 論文では `<slug>.ocr.txt` と読み替える。
+
 fetch の出力の `existing_sources=` が空でなければ、その論文は既に wiki にある。新しい source ページを作らず、挙がった既存ページを更新する(本文の追記、図表の補完、`updated:` の更新。address は再採番しない)。完了報告に `Existing: <既存ページ>` を書く。
 
 `pages=` が 30 以上かつ章相当の節構造、または博士/修士論文なら、このセッションでは続けない。`fetch-book.sh` を呼ばない。章ページを書かない。報告は `Deferred: wiki-ingest-thesis を新セッションで`。

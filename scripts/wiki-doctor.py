@@ -319,6 +319,15 @@ def pid_alive(pid):
         return None
 
 
+def frontmatter_block(text):
+    """先頭の `---` から閉じの `---` までを返す。frontmatter が無ければ先頭 1500 字。"""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            return text[:end]
+    return text[:1500]
+
+
 def check_address_counter(r, ctx):
     counter_file = META / "address-counter.txt"
     addrs = Counter()
@@ -326,9 +335,12 @@ def check_address_counter(r, ctx):
     missing = []
     for p in ctx.get("address_pages") or ctx["pages"]:
         try:
-            head = p.read_text(encoding="utf-8")[:1500]
+            text = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        # address は frontmatter の末尾近くに置かれることがある(sources・related が長いページ)。
+        # 先頭の固定長で切ると見落とし、欠落・重複の両方を取りこぼすので、frontmatter 全体を見る。
+        head = frontmatter_block(text)
         m = ADDRESS_RE.search(head)
         if m:
             addrs[m.group(1)] += 1

@@ -3,13 +3,14 @@
 #
 # 論文の参照(arXiv URL / arXiv ID / 任意の PDF URL / ローカル PDF パス)を解決し、
 # 不変原本として .raw/papers/ に PDF を配置、%PDF シグネチャで健全性を検証し、
-# 取り込み用にプレーンテキスト(.txt)を抽出する。wiki/ 配下は一切変更しない。
+# 取り込み用に読み順のプレーンテキスト(.txt)を抽出する。wiki/ 配下は一切変更しない。
 #
 # 使い方:
 #   scripts/fetch-paper-pdf.sh <arxiv-url|arxiv-id|pdf-url|local-pdf-path> [slug]
 #
 # 入力の解決規則:
-#   - https://arxiv.org/abs/<id> / .../pdf/<id> / 裸の <id>(例 2501.01234, 2501.01234v2)
+#   - https://arxiv.org/abs/<id> / .../pdf/<id> / 裸の <id>(例 2501.01234, 2501.01234v2)。
+#     旧形式 archive/YYMMNNN(例 https://arxiv.org/abs/math/0406077)も URL で受ける
 #       -> https://arxiv.org/pdf/<id>.pdf からダウンロード。arxiv_html ヒントも併せて出力。
 #   - ACM(dl.acm.org/doi/... / doi.org/10.1145/... / 裸の 10.1145/...)
 #       -> https://dl.acm.org/doi/pdf/<doi> を curl で試す。slug は acm-<doi の後半>。
@@ -24,7 +25,9 @@
 #
 # 出力(stdout, key=value 形式。呼び出し側はこれをパースする):
 #   pdf=<.raw/papers/ 配下の相対パス>
-#   txt=<抽出テキストの相対パス>           # 取り込み時に Read する。直接 wiki に貼らない
+#   txt=<抽出テキストの相対パス>           # 取り込み時に Read する。直接 wiki に貼らない。読み順(二段組みは左段→右段)
+#   text_mode=reading-order|pdftotext|none  # reading-order は scripts/pdf-reading-order.py、pdftotext はその代替(既定モード)
+#   layout_txt=<.raw/papers/<slug>.layout.txt>  # pdftotext -layout 版。表の行の並びを見るときだけ使う
 #   arxiv_id=<id または空>
 #   arxiv_html=<https://arxiv.org/html/<id> または空>   # 図表・キャプション抽出の候補(存在確認は呼び出し側)
 #   year_hint=<arXiv ID から推定した発行年 または空>
@@ -38,9 +41,14 @@
 #   figure_id_counts=<ID:回数 をカンマ区切り。verify 失敗時は空>
 #   existing_sources=<同じ arXiv ID / DOI を持つ既存 wiki/sources ページ(; 区切り)または空>
 #       # scripts/paper-ids.py check の結果。空でなければ新規ページを作らず既存ページの更新を検討する
+#   text_quality=ok|sparse|none|glyph-loss   # scripts/pdf-text-quality.py が layout_txt を判定した結果
+#   text_pages= / text_chars_per_page= / text_pua_ratio= / text_replacement_ratio=
+#   ocr_txt=<.raw/papers/<slug>.ocr.txt または空>   # text_quality != ok で OCR できたとき。本文はこれを読む
+#   ocr_status=skipped|ok|failed|disabled   # skipped は ok で不要。failed は pdf-ocr.sh を手で再実行
 #
 # 環境変数:
 #   FETCH_FAIL_IF_EXISTS=1  既存 source ページに一致したらダウンロード前に失敗(終了コード 4)
+#   FETCH_NO_OCR=1          text_quality != ok でも OCR しない(ocr_status=disabled)
 #   FETCH_ORIGIN_REF=<ref>  ローカル PDF の出自(DOI / doi.org URL / 出版社 URL)。ブラウザで落とした
 #                           PDF を渡すときに付けると、既存 source の照合をこの ref で行う
 #
@@ -91,8 +99,9 @@ sanitize_slug() {
 }
 
 extract_arxiv_id() {
-  # 新形式 YYMM.NNNNN(vN 任意)。abs/ pdf/ URL や裸 ID から抜き出す。
-  printf '%s' "$1" | grep -oE '[0-9]{4}\.[0-9]{4,5}(v[0-9]+)?' | head -n1
+  # 新形式 YYMM.NNNNN(vN 任意)と、2007 年 3 月以前の旧形式 archive(.SC)/YYMMNNN(例 math/0406077)。
+  # abs/ pdf/ URL や裸 ID から抜き出す。見つからなければ空を返す(grep の失敗で set -e に落とさない)。
+  printf '%s' "$1" | grep -oE '[0-9]{4}\.[0-9]{4,5}(v[0-9]+)?|[a-z-]+(\.[A-Z]{2})?/[0-9]{7}(v[0-9]+)?' | head -n1 || true
 }
 
 if [ -f "$INPUT" ] && printf '%s' "$INPUT" | grep -qiE '\.pdf$'; then
@@ -103,9 +112,10 @@ elif printf '%s' "$INPUT" | grep -qiE 'arxiv\.org' || printf '%s' "$INPUT" | gre
   [ -n "$ARXIV_ID" ] || die "arXiv ID を抽出できなかった: $INPUT"
   SRC_URL="https://arxiv.org/pdf/${ARXIV_ID}.pdf"
   ARXIV_HTML="https://arxiv.org/html/${ARXIV_ID}"
-  # YYMM の YY から発行年を推定(2007 以降の新形式を前提)
-  YY="${ARXIV_ID:0:2}"
+  # YYMM の YY から発行年を推定。旧形式は / の後ろの 7 桁の先頭 2 桁(91〜99 は 19xx)。
+  YY="${ARXIV_ID##*/}"; YY="${YY:0:2}"
   case "$YY" in
+    9[1-9]) YEAR_HINT="19${YY}" ;;
     [0-9][0-9]) YEAR_HINT="20${YY}" ;;
   esac
 elif ACM_DOI="$(printf '%s' "$INPUT" | grep -oiE '10\.1145/[^?#[:space:]]+' | head -n1)" && [ -n "$ACM_DOI" ]; then
@@ -142,7 +152,7 @@ fi
 if [ -n "$SLUG_ARG" ]; then
   SLUG="$(sanitize_slug "$SLUG_ARG")"
 elif [ -n "$ARXIV_ID" ]; then
-  SLUG="arxiv-$(sanitize_slug "$ARXIV_ID")"
+  SLUG="arxiv-$(sanitize_slug "${ARXIV_ID//\//-}")"   # 旧形式の / は - にする(math/0406077 → arxiv-math-0406077)
 elif [ -n "$PUB_SLUG" ]; then
   SLUG="$(sanitize_slug "$PUB_SLUG")"
 elif [ -n "$LOCAL_PATH" ]; then
@@ -227,17 +237,40 @@ mv -f "$WORK_PDF" "$PDF"
 trap - EXIT
 
 # --- テキスト抽出 -----------------------------------------------------------
-# -layout で段組・表の見かけを保つ。失敗しても致命にしない(画像のみ PDF など)。
-if ! pdftotext -layout "$PDF" "$TXT" 2>/dev/null; then
-  err "warn: pdftotext がテキストを抽出できなかった(スキャン PDF の可能性)。OCR は別途検討。"
+# 読む用の .txt は読み順(二段組みを左段→右段)で作る(scripts/pdf-text.sh)。-layout 版は
+# 表の行の並びを見るためだけに <slug>.layout.txt へ別に置く。失敗しても致命にしない(画像のみ PDF など)。
+LAYOUT_TXT="${DEST_DIR}/${SLUG}.layout.txt"
+TEXT_MODE="$(bash "${SCRIPT_DIR}/pdf-text.sh" "$PDF" "$TXT" | awk -F= '/^text_mode=/{print $2}')" || true
+if [ -z "$TEXT_MODE" ]; then
+  err "warn: テキストを抽出できなかった(スキャン PDF の可能性)。品質判定が OCR に回す。"
   : > "$TXT"
+  TEXT_MODE="none"
+fi
+pdftotext -layout "$PDF" "$LAYOUT_TXT" 2>/dev/null || : > "$LAYOUT_TXT"
+
+# --- 抽出品質の判定と OCR ---------------------------------------------------
+# 抽出が壊れた .txt を読むと、LLM は欠けた部分を推測で埋める。ok 以外は OCR を作り、
+# 読む入力を <slug>.ocr.txt に切り替える(判定基準は pdf-text-quality.py)。
+OCR_TXT="${DEST_DIR}/${SLUG}.ocr.txt"
+# 判定は pdftotext -layout の出力(layout_txt)で行う。しきい値はこの出力の分布で決めた。
+TEXT_QUALITY_OUT="$(python3 "${SCRIPT_DIR}/pdf-text-quality.py" "$LAYOUT_TXT" --pdf "$PDF" 2>/dev/null || true)"
+TEXT_QUALITY="$(printf '%s\n' "$TEXT_QUALITY_OUT" | awk -F= '/^text_quality=/{print $2; exit}')"
+OCR_STATUS="skipped"
+if [ -n "$TEXT_QUALITY" ] && [ "$TEXT_QUALITY" != "ok" ]; then
+  if [ "${FETCH_NO_OCR:-}" = "1" ]; then
+    OCR_STATUS="disabled"
+  elif bash "${SCRIPT_DIR}/pdf-ocr.sh" "$PDF" "$OCR_TXT" >/dev/null; then
+    OCR_STATUS="ok"
+  else
+    OCR_STATUS="failed"
+    err "warn: text_quality=${TEXT_QUALITY} だが OCR に失敗した。サンドボックス無効化で bash scripts/pdf-ocr.sh \"$PDF\" \"$OCR_TXT\" を再実行する。"
+  fi
 fi
 
 # --- 画像抽出 ---------------------------------------------------------------
 IMAGES_DIR="${DEST_DIR}/${SLUG}/images"
 IMAGE_MANIFEST="${IMAGES_DIR}/images.json"
 IMAGES_COUNT="0"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE_EXTRACTOR="${SCRIPT_DIR}/extract-paper-images.mjs"
 
 command -v node >/dev/null 2>&1 || die "node が見つからない(pdf.js 画像抽出に必要)"
@@ -368,3 +401,8 @@ printf 'image_manifest=%s\n' "$IMAGE_MANIFEST"
 printf 'figure_ids=%s\n' "$FIGURE_IDS"
 printf 'figure_id_counts=%s\n' "$FIGURE_ID_COUNTS"
 printf 'existing_sources=%s\n' "$EXISTING_SOURCES"
+printf 'text_mode=%s\n' "$TEXT_MODE"
+printf 'layout_txt=%s\n' "$LAYOUT_TXT"
+printf '%s\n' "$TEXT_QUALITY_OUT" | grep -E '^text_' || true
+if [ "$OCR_STATUS" = "ok" ]; then printf 'ocr_txt=%s\n' "$OCR_TXT"; else printf 'ocr_txt=\n'; fi
+printf 'ocr_status=%s\n' "$OCR_STATUS"

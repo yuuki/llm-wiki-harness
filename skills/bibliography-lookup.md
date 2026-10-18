@@ -79,7 +79,16 @@ curl -sS -m 30 -A "research-vault/bibliography-lookup (mailto:research-vault@use
 
 題の一致は正規化して見る(小文字、連続空白、末尾の句読点を落とす)。先頭ヒットを無検証で採らない。
 
-DBLP の応答が JSON でない(ボット判定の HTML を 200 で返す)ときは、その供給源を捨てて arXiv / Crossref / ランディングページだけで進める。同じ URL を連打しない。
+DBLP の応答が JSON でない(ボット判定の HTML を 200 で返す)ときは、その供給源を捨てて arXiv / Crossref / ランディングページだけで進める。同じ URL を連打しない。2026-10 時点の DBLP は Anubis のチャレンジを HTTP 202 で返す。チャレンジは突破しない。
+
+DBLP が使えないときの会場確認は Crossref の題名検索で行う。
+
+```bash
+curl -sS -m 30 -A "research-vault/bibliography-lookup (mailto:research-vault@users.noreply.github.com)" \
+  "https://api.crossref.org/works?query.bibliographic=$(urlencode "$TITLE")&rows=5&select=DOI,title,subtitle,type,container-title,event,issued"
+```
+
+先頭ヒットを無検証で採らず、`type` が proceedings-article / journal-article で題名が一致するものだけを採る。ACM は題名と副題を別欄に登録する(`title: ["Sieve"]`、`subtitle: ["Actionable Insights from ..."]`)ので、`title: subtitle` とつないでから照合する。
 
 ## 使わないもの
 

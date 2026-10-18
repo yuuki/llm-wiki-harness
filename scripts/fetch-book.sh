@@ -95,6 +95,7 @@ DEST_DIR="${RAW_ROOT}/${SLUG}"
 CHAPTERS_DIR="${DEST_DIR}/chapters"
 PDF="${DEST_DIR}/${SLUG}.pdf"
 TXT="${DEST_DIR}/${SLUG}.txt"
+LAYOUT_TXT="${DEST_DIR}/${SLUG}.layout.txt"   # pdftotext -layout の全文。表の行の並びを見るときだけ使う
 TOC="${DEST_DIR}/toc.txt"
 
 if [ "$FORCE" -ne 1 ] && [ -d "$DEST_DIR" ] && find "$DEST_DIR" -type f | grep -q .; then
@@ -105,6 +106,7 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fetch-book.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 WORK_PDF="${WORK_DIR}/${SLUG}.pdf"
 WORK_TXT="${WORK_DIR}/${SLUG}.txt"
+WORK_LAYOUT_TXT="${WORK_DIR}/${SLUG}.layout.txt"
 WORK_TOC="${WORK_DIR}/toc.txt"
 WORK_CHAPTERS_DIR="${WORK_DIR}/chapters"
 mkdir -p "$WORK_CHAPTERS_DIR"
@@ -125,10 +127,12 @@ case "$sig" in
   *) die "取得物が PDF ではない(先頭=$(printf '%q' "$sig")): ${PDF_URL:-$LOCAL_PATH}" ;;
 esac
 
-if ! pdftotext -layout "$WORK_PDF" "$WORK_TXT" 2>/dev/null; then
-  err "warn: pdftotext がテキストを抽出できなかった(スキャン PDF の可能性)。空テキストで続行する。"
+# 読み順(二段組みは左段→右段)で取り出す。-layout は左右の段の行を 1 行に並べるので使わない(scripts/pdf-text.sh)。
+if ! bash "$(dirname "${BASH_SOURCE[0]}")/pdf-text.sh" "$WORK_PDF" "$WORK_TXT" >/dev/null; then
+  err "warn: テキストを抽出できなかった(スキャン PDF の可能性)。空テキストで続行する。"
   : > "$WORK_TXT"
 fi
+pdftotext -layout "$WORK_PDF" "$WORK_LAYOUT_TXT" 2>/dev/null || : > "$WORK_LAYOUT_TXT"
 
 PAGES=""
 TITLE=""
@@ -266,7 +270,7 @@ while IFS='|' read -r tag num start end title; do
   CHAPTERS_COUNT=$((CHAPTERS_COUNT + 1))
   padded="$(printf '%02d' "$num")"
   ch_txt="${WORK_CHAPTERS_DIR}/ch-${padded}.txt"
-  pdftotext -layout -f "$start" -l "$end" "$WORK_PDF" "$ch_txt" 2>/dev/null \
+  bash "$(dirname "${BASH_SOURCE[0]}")/pdf-text.sh" "$WORK_PDF" "$ch_txt" "$start" "$end" >/dev/null \
     || die "章テキスト抽出に失敗: ch-${padded} (p.${start}-${end})"
   CHAPTER_KV="${CHAPTER_KV}chapter_${padded}=${start}-${end}|${title}
 "
@@ -275,16 +279,18 @@ $CHAPTER_LINES
 EOF_CH
 
 if [ "$FORCE" -eq 1 ]; then
-  rm -f "$PDF" "$TXT" "$TOC" "$CHAPTERS_DIR"/ch-*.txt 2>/dev/null || true
+  rm -f "$PDF" "$TXT" "$LAYOUT_TXT" "$TOC" "$CHAPTERS_DIR"/ch-*.txt 2>/dev/null || true
 fi
 mkdir -p "$CHAPTERS_DIR"
 mv -f "$WORK_PDF" "$PDF"
 mv -f "$WORK_TXT" "$TXT"
+mv -f "$WORK_LAYOUT_TXT" "$LAYOUT_TXT"
 mv -f "$WORK_TOC" "$TOC"
 find "$WORK_CHAPTERS_DIR" -maxdepth 1 -type f -name 'ch-*.txt' -exec mv -f {} "$CHAPTERS_DIR"/ \;
 
 printf 'pdf=%s\n' "$PDF"
 printf 'txt=%s\n' "$TXT"
+printf 'layout_txt=%s\n' "$LAYOUT_TXT"
 printf 'slug=%s\n' "$SLUG"
 printf 'pages=%s\n' "$PAGES"
 printf 'title=%s\n' "$TITLE"

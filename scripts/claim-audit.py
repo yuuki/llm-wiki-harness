@@ -13,6 +13,10 @@ source ページ(と、あれば `.raw/` の抽出テキスト)から語彙重�
   python3 scripts/claim-audit.py sample --random 10 [--seed 7] [--per-page 2]
       命題を選び、根拠候補の抜粋を添えた JSON を stdout に出す。台帳に既に判定のある命題は
       --reaudit を付けない限り除く。--include-inbox で受信箱の観察も対象にする。
+      命題の id はページと命題の文言のハッシュなので、文言を変えると別 id になる。空白・句読点・括弧・
+      太字・全角半角だけの違い(loose_claim_key が同じ)は判定済みとみなして除く。語や数値が変わった
+      命題は、前の判定が新しい文言を保証しないので除かない(再判定の対象である)。
+      根拠行はタブで字下げしてもよい。
   python3 scripts/claim-audit.py record --verdicts /tmp/verdicts.json [--by human|agent]
       判定 JSON([{"id","verdict","note"}])を台帳 `.vault-meta/claim-audit.json` に追記し、
       `wiki/meta/claim-audit-YYYY-MM-DD.md` を当日分の台帳から再描画する。
@@ -27,6 +31,8 @@ source ページ(と、あれば `.raw/` の抽出テキスト)から語彙重�
       --spec は wiki-append の batch spec の観察と問い(追記の前に使う)、--source-page は source ページ本文を
       自分の raw 抽出テキストに照らす。missing はページにも raw にも無い数値、raw_only はページに無く
       raw にだけある数値(出典に無いと誤判定しないための印)。どちらも判定ではなく要確認の一覧である。
+      照合する側(命題・根拠・観察)では、年月(2025-11、2025/11)、節番号(§3.2.3、Section 7.4、3.2 節、
+      第 3 章)、図表・式番号(Fig. 5、Table 2、図 3、表 4-1)を数値として読まない(CLAIM_BLANK_RE)。
       missing があれば終了 1。sample のパケットにも同じ照合結果が `numbers` として付く。
 
 判定語:
@@ -59,7 +65,7 @@ import sys
 import tempfile
 import unicodedata
 from datetime import date, datetime
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, ROUND_DOWN, Decimal, InvalidOperation
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
@@ -245,6 +251,13 @@ def number_raw_paths(fm):
         for extra in (root / "toc.txt", root / f"{root.name}.txt"):
             if extra.is_file() and extra not in out:
                 out.append(extra)
+    # 同じ PDF の別の抽出(fetch-paper-pdf.sh の -layout 版と OCR 版)。読み順版で崩れた表の値や、
+    # 解読できなかった字形の数字はこちらにある。sources: に書かれていなくても照らす。
+    for raw in list(out):
+        if raw.suffix == ".txt" and not raw.name.endswith((".layout.txt", ".ocr.txt")):
+            for extra in (raw.with_suffix(".layout.txt"), raw.with_suffix(".ocr.txt")):
+                if extra.is_file() and extra not in out:
+                    out.append(extra)
     return out
 
 
@@ -265,9 +278,13 @@ def hub_packet(name, claim):
 # --------------------------------------------------------------------------- 数値の照合
 
 # 数値として読まない部分。wikilink(出典名の年)、コード、URL、ISO 日付、頁番号。
+# コード片・wikilink・リンク先は 1 行の中に限る。行をまたがせると、抽出テキストの孤立した ` から次の ` まで
+# (Deep Speech 2 では 700 行余り)を読み飛ばし、原文にある数値を missing と誤判定する。
 NUM_BLANK_RE = re.compile(
-    r"!?\[\[[^\]]*\]\]|`[^`]*`|\]\([^)]*\)|https?://\S+|\b\d{4}-\d{2}-\d{2}\b"
-    r"|\bpp?\.\s*\d+(?:\s*[-–]\s*\d+)?|\b10\.\d{4,}/\S+|\b\d{4}\.\d{4,5}(?:v\d+)?\b"
+    r"!?\[\[[^\]\n]*\]\]|`[^`\n]*`|\]\([^)\n]*\)|https?://[!-~]+|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\bpp?\.\s*\d+(?:\s*[-–—~〜]\s*(?:pp?\.\s*)?\d+)?"
+    # 頁の列挙(p.171-173, 180-184)。続く数が括弧か区切りで終わるときだけ頁とみなす(p.5, 3 倍 の 3 は残す)
+    r"(?:\s*[,、]\s*\d+(?:\s*[-–—~〜]\s*\d+)?(?=\s*[,、)）]|\s*$))*|(?:スライド|[Ss]lides?)\s*\d+(?:\s*[-–—~〜・、,]\s*\d+)*|\b10\.\d{4,}/\S+|\b\d{4}\.\d{4,5}(?:v\d+)?\b"
 )
 # 著者年の引用(Salfner+ 2010、Zhang et al. 2024、Cook (1998))。数値の主張ではなく文献の名指しなので、
 # 照合する側(命題・根拠・観察)でだけ読まない。出典側で消すと文献表の刊行年が照合に使えなくなる。
@@ -276,12 +293,32 @@ CITATION_RE = re.compile(
     r"|\b[A-Z][A-Za-z\-]+\s\((?:19|20)\d{2}\)"
 )
 # 図表キャプション。数値は画像から読んだもので抽出テキストに無いのが普通なので、missing と分けて返す。
-CAPTION_RE = re.compile(r"^\(?(?:Figure|Fig\.|Table|図|表)\s*\d")
-# 3.3.2 のような節番号は字面で、それ以外は値で照合する。英字直後の数字(H100, GPT4, v2)は識別子なので拾わない。
+# 斜体のキャプション(`*Figure 8: …*`)も同じ扱い。
+# 動画ページのフレーム画像の説明(frame-031(12:34): …)とスライド画像の説明(スライド 7: …)も同じ扱い。
+CAPTION_RE = re.compile(r"^[*_]*\(?(?:Figure|Fig\.|Table|図|表|スライド|frame-)\s*\d")
+# 照合する側でだけ読まない番号。年月(2025-11)、節番号(§3.2.3、Section 7.4、3.2 節、第 3 章)、
+# 図表・式・付録の番号(Fig. 5、Table 2、図 3、表 4-1)。値の主張ではなく出典の中の位置や日付の名指しである。
+# 年月は expand_year_ranges の後に当てるので、省略した年の範囲(2019-21 → 2019-2021)とは衝突しない。
+_RANGE_TAIL = r"(?:\s*[-–—~〜]\s*\d+(?:\.\d+)*[a-z]?)*"
+CLAIM_BLANK_RE = re.compile(
+    r"(?<![0-9.])(?:19|20)\d{2}[-/](?:0?[1-9]|1[0-2])(?![0-9])"
+    r"|§\s*\d+(?:\.\d+)*" + _RANGE_TAIL +
+    # 原本テキストの行番号の参照(l.544–577、ll. 12-14)。値ではない
+    r"|(?<![A-Za-z])ll?\.\s*\d+" + _RANGE_TAIL +
+    r"|\.(?:md|txt|py|sh):\d+" + _RANGE_TAIL +
+    r"|(?i:\b(?:sections?|sec\.|chapters?|ch\.|appendix|app\.|figures?|figs?\.|tables?|tab\.|"
+    r"eqs?\.|equations?|algorithms?|alg\.|listings?|theorems?|thm\.|lemmas?)\s*)\(?"
+    r"(?:[A-Z](?=[.\d]))?\.?\d+(?:\.\d+)*[a-z]?" + _RANGE_TAIL +
+    r"|(?<![\u4e00-\u9fff])(?:図|表|式|付録)\s*[A-Z]?\d+(?:[.\-]\d+)*" + _RANGE_TAIL +
+    r"|第\s*\d+(?:\.\d+)*\s*(?:章|節|項|部)"
+    r"|\d+(?:\.\d+)*\s*(?:節|項)(?![\u4e00-\u9fff])"
+)
+# 3.3.2 のような節番号は字面で、それ以外は値で照合する。英字直後の数字(H100, GPT4, v2)と英字+ハイフンの後の数字
+# (GPT-4, ch-09)は識別子なので拾わない。ただし mid-2014 の年は拾う。
 # 古い論文の抽出テキストは小数の先頭の 0 を省く(.5)。英字・数字・点の直後でない「.」から始まるものは小数として読む
 # (Fig.5、v1.2、...3 は従来どおり拾わない)。
 NUM_RE = re.compile(
-    r"(?<![A-Za-z0-9.])"
+    r"(?<![A-Za-z0-9.])(?:(?<![A-Za-z]-)|(?=(?:19|20)\d{2}(?!\d)))"
     r"(\d+(?:\.\d+){2,}|\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)"
     r"(?![0-9])\s*(%|[kKMB](?![A-Za-z])|万|億|(?i:thousand|million|billion)\b)?"
 )
@@ -293,6 +330,56 @@ CHECKED_EVIDENCE = ("根拠", "反証")
 def _canon(d):
     s = format(d.normalize(), "f")
     return s[:-2] if s.endswith(".0") else s
+
+
+# 上付き数字(2¹² の ¹²)。NFKC は 212 にして存在しない数値を作るので、先に ^12 にする。
+# 抽出テキスト(scripts/pdf-reading-order.py)も上付きを 2^12 と書く。
+SUPERSCRIPT_RUN_RE = re.compile("[\u2070\u00b9\u00b2\u00b3\u2074-\u2079\u207b]+")
+SUPERSCRIPT_MAP = str.maketrans("\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079\u207b", "0123456789-")
+
+
+def caret_superscripts(text):
+    return SUPERSCRIPT_RUN_RE.sub(lambda m: "^" + m.group(0).translate(SUPERSCRIPT_MAP), text)
+
+
+# 縦書きの和書(Kindle OCR)は数を漢数字の位取りで書く(一八三〇年、四五時間、〇・五三%)。原文側だけ算用数字に
+# 直して照合する。2 字以上の並びに限る(「一人当たり」の一は数ではない)。十・百・千の命数法は扱わない。
+KANJI_DIGITS = str.maketrans("〇一二三四五六七八九", "0123456789")
+KANJI_RUN_RE = re.compile("[〇一二三四五六七八九](?:[〇一二三四五六七八九]|・(?=[〇一二三四五六七八九]))+")
+
+
+# OCR が算用数字の小数点を中黒にすることがある(0・33)。
+NAKAGURO_DECIMAL_RE = re.compile(r"(?<=\d)・(?=\d)")
+
+
+# 古い組版の抽出テキストは 0.632 の小数点をコロンにすることがある(0:632)。先頭が 0 のものだけ直す(16:45 は時刻)。
+COLON_DECIMAL_RE = re.compile(r"(?<![\d:])0:(?=\d)")
+
+
+def kanji_positional_digits(text):
+    text = COLON_DECIMAL_RE.sub("0.", NAKAGURO_DECIMAL_RE.sub(".", text))
+    return KANJI_RUN_RE.sub(lambda m: m.group(0).translate(KANJI_DIGITS).replace("・", "."), text)
+
+
+# 原文の桁区切りの揺れ。ntopng の論文は 1’735’000、FlashRecovery の抽出テキストは 16, 384 と書く。
+# ’ は区切りとして外す。「カンマ+空白」は数の列挙(16 と 384)とも読めるので、元の文字列を残したまま、
+# つないだ数を末尾に足して候補を増やす(原文側だけ)。
+APOS_SEP_RE = re.compile("(?<=\\d)[’'](?=\\d{3}(?!\\d))")
+SPACED_THOUSANDS_RE = re.compile(r"(?<![\d.])\d{1,3}(?:,? \d{3})+(?![\d])%?")
+# 抽出テキストが小数点の後に空白を入れる版下がある(「1. 46GB/s」)。
+SPACED_DECIMAL_RE = re.compile(r"(?<![\d.])(\d+)\. (\d+)(?![\d.])(%?)")
+
+
+def alt_thousands(text):
+    """原本側だけで使う別表記。結合した数値を末尾に足すだけで、元の数値は消さない。
+
+    「190 202」(空白の千区切り)は隣り合う別々の数値とも読めるが、足すのは鍵だけなので、
+    誤って結合しても missing を 1 つ見逃しうるだけで、存在しない数値を作らない。
+    """
+    text = APOS_SEP_RE.sub("", text)
+    extra = [m.group(0).replace(",", "").replace(" ", "") for m in SPACED_THOUSANDS_RE.finditer(text)]
+    extra += [f"{m.group(1)}.{m.group(2)}{m.group(3)}" for m in SPACED_DECIMAL_RE.finditer(text)]
+    return text + ("\n" + " ".join(extra) if extra else "")
 
 
 # 年の範囲表記で後ろの年を下 2 桁に省略した形(1984〜86 年、2019-21)。NFKC の後なので「〜」は残り、「～」は「~」になる。
@@ -313,11 +400,33 @@ def expand_year_ranges(s):
     return YEAR_RANGE_RE.sub(repl, s)
 
 
+# 「3 億 7000 万」は 1 つの数。億と万を別々に読むと 3 億と 7000 万になり、原文の 370 million と合わない。
+OKU_MAN_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*億\s*(\d,\d{3}|\d{1,4})\s*万")
+
+
+def _oku_man(m):
+    return _canon(Decimal(m.group(1)) * 10**8 + Decimal(m.group(2).replace(",", "")) * 10**4)
+
+
+CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
+# 番号付きリストの行頭の番号(「2. 」)。値ではない。
+LIST_MARK_RE = re.compile(r"(?m)^\s*(?:[-*]\s+)?\d{1,2}\.(?=\s)")
+
+
 def number_mentions(text, source_side=False):
     """text 中の数値を [(字面, 照合キー集合)] で返す。キーは 1.50 と 1.5、10K と 10000、35% と 0.35 を同一視する。"""
-    s = expand_year_ranges(NUM_BLANK_RE.sub(" ", unicodedata.normalize("NFKC", text)))
+    if source_side:
+        text = alt_thousands(kanji_positional_digits(text))
+    s = unicodedata.normalize("NFKC", caret_superscripts(text))
+    if source_side:
+        # 原文のコード片(`2.5ms`、計算式)の値は本文の値と同じ扱いで照合に使う。消すのはページ側だけ。
+        s = CODE_SPAN_RE.sub(lambda m: m.group(0).replace("`", " "), s)
+    s = expand_year_ranges(NUM_BLANK_RE.sub(" ", s))
+    s = OKU_MAN_RE.sub(_oku_man, s)
     if not source_side:
         s = CITATION_RE.sub(" ", s)
+        s = CLAIM_BLANK_RE.sub(" ", s)
+        s = LIST_MARK_RE.sub(" ", s)
     out = []
     for m in NUM_RE.finditer(s):
         num, suffix = m.group(1), m.group(2)
@@ -343,15 +452,53 @@ WORD_NUMBERS = {w: i for i, w in enumerate(
 WORD_NUMBERS.update({w: i for i, w in enumerate(
     "_ first second third fourth fifth sixth seventh eighth ninth tenth".split()) if i})
 WORD_NUMBERS.update({"twice": 2, "double": 2, "triple": 3, "half": 0.5, "dozen": 12})
-WORD_RE = re.compile(r"\b(" + "|".join(WORD_NUMBERS) + r")\b", re.IGNORECASE)
+WORD_NUMBERS.update({w: i + 13 for i, w in enumerate(
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split())})
+TENS = {w: (i + 2) * 10 for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split())}
+WORD_NUMBERS.update(TENS)
+# twenty-five・twenty five は 25 として読む。長い候補を先に並べる。
+WORD_RE = re.compile(r"\b((?:one|two|three|four|five|six|seven|eight|nine) hundred|"
+                     r"(?:" + "|".join(TENS) + r")[- ](?:one|two|three|four|five|six|seven|eight|nine)|"
+                     + "|".join(sorted(WORD_NUMBERS, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+
+
+WORD_SCALE_RE = re.compile(WORD_RE.pattern + r"\s+(thousand|million|billion)\b", re.IGNORECASE)
+
+
+def word_number(w):
+    parts = re.split(r"[- ]", w.lower())
+    if parts[-1] == "hundred":
+        return WORD_NUMBERS[parts[0]] * 100
+    return sum(WORD_NUMBERS[p] for p in parts) if len(parts) == 2 else WORD_NUMBERS[parts[0]]
 # source ページで照合しない節。書誌(出版年・版・URL)は抽出テキストに無いことが多い。
 BIBLIO_HEADINGS = ("出典", "論文情報", "書誌情報", "関連")
+
+
+# 原文の月名(November 9、Nov 2014)と URL の年月(/2022/11/)。ページは 11 月・2022 年と書く。原文側だけで鍵にする。
+# May は助動詞と区別できないので、大文字始まりの月名に限る。
+MONTHS = "January February March April May June July August September October November December".split()
+MONTH_RE = re.compile(r"\b(" + "|".join(MONTHS) + r"|(?:Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?(?=\s*\d))\b")
+URL_DATE_RE = re.compile(r"https?://\S*?/((?:19|20)\d{2})/(0?[1-9]|1[0-2])/")
+
+
+def month_keys(text):
+    keys = set()
+    for m in MONTH_RE.finditer(text):
+        name = m.group(1).rstrip(".")
+        keys.add(str(next(i for i, full in enumerate(MONTHS, 1) if full.startswith(name[:3]))))
+    for m in URL_DATE_RE.finditer(text):
+        keys |= {m.group(1), str(int(m.group(2)))}
+    return keys
 
 
 def number_keys(text):
     """出典側の数値キー。命題は丸めて書くので、小数は桁を落とした値(0.4837 → 0.484, 0.48, 0.5, 0)も持たせる。
     英語の数詞(two, second, twice)も数値として持たせる。"""
-    keys = {_canon(Decimal(str(WORD_NUMBERS[w.lower()]))) for w in WORD_RE.findall(text)}
+    keys = {_canon(Decimal(str(word_number(w)))) for w in WORD_RE.findall(text)}
+    # two billion・fifty thousand のように数詞に桁の語が続くもの
+    for w, scale in WORD_SCALE_RE.findall(text):
+        keys.add(_canon(Decimal(str(word_number(w))) * NUM_SCALE[scale.lower()]))
+    keys |= month_keys(text)
     for _, ks in number_mentions(text, source_side=True):
         keys |= ks
         for k in list(ks):
@@ -360,6 +507,7 @@ def number_keys(text):
             d = Decimal(k)
             for places in range(len(k.split(".")[1]) - 1, -1, -1):
                 keys.add(_canon(d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)))
+            keys.add(_canon(d.to_integral_value(rounding=ROUND_DOWN)))  # 963.53 を 963 と切り捨てて書くページもある
     return keys
 
 
@@ -527,16 +675,31 @@ def recompiled_pages(limit):
     return [rel for _, rel in rows[:limit]]
 
 
+_LOOSE_DROP_RE = re.compile(r"[\s。、，,．.・:：;；!！?？「」『』()（）\[\]【】\"'`*_~\-–—]")
+
+
+def loose_claim_key(page, text):
+    """書式だけの違いを無視した命題のキー。空白・句読点・括弧・太字・全角半角・大小文字を落とす。
+
+    語や数値の違いは残す。言い換えた命題は前の判定が保証しないので、同じキーにしない。
+    """
+    t = unicodedata.normalize("NFKC", str(text)).lower()
+    return f"{page}\n{_LOOSE_DROP_RE.sub('', t)}"
+
+
 def sample(pages, per_page, include_inbox, reaudit, rng):
     ledger = load_ledger()
     haystack = NumberHaystack()
     audited = set(ledger["verdicts"])
+    audited_loose = {loose_claim_key(e.get("page", ""), e.get("claim", ""))
+                     for e in ledger["verdicts"].values() if e.get("page") and e.get("claim")}
     out = []
     skipped = 0
     for rel in pages:
         claims = extract_claims(rel, include_inbox=include_inbox)
         if not reaudit:
-            fresh = [c for c in claims if c["id"] not in audited]
+            fresh = [c for c in claims if c["id"] not in audited
+                     and loose_claim_key(c["page"], c["claim"]) not in audited_loose]
             skipped += len(claims) - len(fresh)
             claims = fresh
         if rng is not None:
@@ -586,6 +749,32 @@ def numbers_for_spec(spec_path):
     return {"checked": checked, "unsourced_lines": unsourced, "lines": rows}
 
 
+VISUAL_MARK = "目視"
+
+
+def visually_read_lines(lines):
+    """図表やフレームの画像から目視で読んだと明記された行の番号(1 始まり)。
+
+    抽出テキストに現れない画像の表の値は、照合のたびに missing に出る。ingest や再検証で
+    「目視」と注記した行と、説明行(直前か直後の表でない行)に「目視」がある表の行は、
+    キャプションと同じく caption_missing に分ける。注記の無い表は従来どおり missing に出す。
+    """
+    marked = {i for i, ln in enumerate(lines, 1) if VISUAL_MARK in ln}
+    i = 0
+    while i < len(lines):
+        if not lines[i].lstrip().startswith("|"):
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and lines[j].lstrip().startswith("|"):
+            j += 1
+        near = [k for k in (i - 1, i - 2, j, j + 1) if 0 <= k < len(lines) and lines[k].strip()]
+        if any(VISUAL_MARK in lines[k] or CAPTION_RE.match(lines[k].strip()) for k in near[:1] + near[2:3]):
+            marked.update(range(i + 1, j + 1))
+        i = j
+    return marked
+
+
 def numbers_for_source_page(rel):
     """source ページ本文(key_claims を含む)の数値のうち、raw 抽出テキストに無いものを行番号つきで返す。"""
     path = VAULT_ROOT / rel
@@ -605,7 +794,9 @@ def numbers_for_source_page(rel):
     offset = len(text.splitlines()) - len(body.splitlines())
     rows = [("key_claims", str(kc)) for kc in STATS.as_list(fm.get("key_claims"))]
     heading = ""
-    for n, line in enumerate(body.splitlines(), 1):
+    body_lines = body.splitlines()
+    visual = visually_read_lines(body_lines)
+    for n, line in enumerate(body_lines, 1):
         if line.startswith("## "):
             heading = line[3:].strip()
         elif heading not in BIBLIO_HEADINGS:
@@ -614,7 +805,11 @@ def numbers_for_source_page(rel):
         for literal, keys in number_mentions(line):
             out["checked"] += 1
             if not keys & raw_keys:
-                bucket = "caption_missing" if CAPTION_RE.match(line.strip()) else "missing"
+                if isinstance(where, int):
+                    is_visual = CAPTION_RE.match(line.strip()) or (where - offset) in visual
+                else:  # key_claims は 1 項目が 1 行。本文と同じく「目視」の注記を認める
+                    is_visual = VISUAL_MARK in line
+                bucket = "caption_missing" if is_visual else "missing"
                 out[bucket].append({"line": where, "number": literal, "text": line.strip()[:160]})
     return out
 

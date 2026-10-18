@@ -65,6 +65,46 @@ class WikiQuestionsTest(unittest.TestCase):
         ):
             self.assertFalse(is_stray_assertion(text), text)
 
+    def test_more_reporting_verbs_with_source_subject_are_stray(self):
+        for text in (
+            "- [[@2024__arXiv__X]] は最新データでの再訓練を根拠に前者と結論づける。両者を分ける実験は無いか。",
+            "- [[@2024__arXiv__X]] は前者と結論する。他の環境ではどうか。",
+            "- [[@2024__arXiv__X]] は後者を主張するが、提示の有無は観測していない。",
+            "- [[@2024__arXiv__X]] は帰責の誤りが 3 割と明らかにした。原因は何か?",
+            "- **帰責**: [[@2024__arXiv__X]] は早期緩和が可逆ゆえ偽陽性 12.4% でも許容と論じる(§4)。別の障害でも成り立つか。",
+        ):
+            self.assertTrue(is_stray_assertion(text), text)
+
+    def test_source_frame_assertion_is_stray(self):
+        text = "- [[@2024__arXiv__X]] によれば、本番の再起動は 1 日 3 回である。他社でも同じ頻度か。"
+        self.assertTrue(is_stray_assertion(text))
+        # 枠の中身が未解決点なら問いのまま
+        self.assertFalse(is_stray_assertion("- [[@2024__arXiv__X]] によれば、本番での効果は未検証である。"))
+
+    def test_reported_result_then_question_is_stray(self):
+        for text in (
+            "- AgentX は Flink ジョブ診断で有効性を示したが、別ドメインでも同じ効果を持つか。"
+            "(Source: [[@2024__CIKM__AgentX]])",
+            "- 予備実験は MethodC の 0.32 → 0.06 への低下を示した。どの障害種別で統合が効くか。([[@2025__WWW__BenchE]])",
+            "- ModelU は 38 データセット規模で有効性を実証したが、数千ドメインでのスケーラビリティは未検証。"
+            "([[@2024__NeurIPS__ModelU]])",
+        ):
+            self.assertTrue(is_stray_assertion(text), text)
+            self.assertFalse(is_asserted_proposition(text), "太字の頭で言い切っていなければ追記は拒まない")
+
+    def test_reporting_verbs_do_not_overfire_on_questions(self):
+        # 連体で続く報告、否定、問いの形の報告、背景の叙述(述べた)は問いのまま
+        for text in (
+            "- [[@2024__arXiv__X]] が結論づけた 45% は他社でも成り立つか。",
+            "- [[@2024__arXiv__X]] は前者か後者かを結論づけていない。",
+            "- [[@2024__arXiv__X]] は帰責の誤りを明らかにしたか。",
+            "- 結論づけられるだけの比較は未実施である([[@2024__arXiv__X]])。",
+            "- 背景の事実を述べた(Source: [[@2026__X__Y]])。本番で成り立つか。",
+            "- X が示した改善は他の構成でも再現するか(Source: [[@2026__X__Y]])。",
+            "- 有効性を示したかどうかは未確認である。代替は何か(Source: [[@2026__X__Y]])。",
+        ):
+            self.assertFalse(is_stray_assertion(text), text)
+
     def test_open_points_with_citation_stay_questions(self):
         for text in (
             "- **本番での再現は未検証である**: 背景(Source: [[@2026__X__Y]])",

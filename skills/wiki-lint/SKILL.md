@@ -38,6 +38,7 @@ Run check 18 (doctor) first, then work through 1–17 and 19 in order:
     ```
 
     Report the counts (callouts / pages / open / explained) and list the one-sided candidates under **## Contradictions**. §5 requires a contradiction to be marked on *both* pages; a one-sided pair is a candidate for the human to add the counterpart callout, not an automatic fix. Do not edit callouts from lint. The **Stale Claims** check (item 3) stays a human comparison; the index only tells you where the wiki already knows it disagrees with itself.
+    **Concept structure.** `python3 scripts/wiki-concept-stats.py --structure --json` lists concept pages missing `# タイトル`, `## 定義`, or `## 出典`, and pages whose body cites `[[@` while frontmatter `sources:` is empty. Report the counts and the pages under **## Structure**; repairs belong to wiki-refactor (補完).
 12. **Recompile queue** (conventions §8 update rule 6). Sync the compile-debt scan into the persistent queue and paste its report:
 
     ```bash

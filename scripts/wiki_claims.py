@@ -19,7 +19,9 @@ VAULT_ROOT = Path(os.environ.get("WIKI_VAULT_ROOT") or Path(__file__).resolve().
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]")
 PROPOSITION_RE = re.compile(r"^- \*\*(.+?)\*\*\s*(.*)$")
-EVIDENCE_RE = re.compile(r"^\s{2,}- (根拠|反証|留保|関連):\s*(.*)$")
+# 根拠行の字下げは空白 2 つ以上かタブ 1 つ以上(タブ字下げの根拠行を 0 件と数えていた)
+EVIDENCE_RE = re.compile(r"^(?:\t|[ ]{2,})[ \t]*- (根拠|反証|留保|関連):\s*(.*)$")
+INDENT_PREFIXES = ("  ", "\t")
 TOP_BULLET_RE = re.compile(r"^- (.*)$")
 
 
@@ -179,7 +181,7 @@ def extract_claims(page_rel, include_inbox=False, text=None):
             has_grounds = False
             evidence_lines = []
             j = i + 1
-            while j < len(lines) and (lines[j].startswith("  ") or lines[j].strip() == ""):
+            while j < len(lines) and (lines[j].startswith(INDENT_PREFIXES) or lines[j].strip() == ""):
                 ev = EVIDENCE_RE.match(lines[j])
                 if ev:
                     evidence_lines.append(lines[j].strip())

@@ -9,6 +9,8 @@
 使い方:
   python3 scripts/recompile-queue.py refresh [--min-inbox 5] [--min-orphan-inbox 15]
       負債を走査してキューに同期する。新規は pending、負債が消えた pending / in_progress は done。
+      負債の数え方は wiki-concept-stats.py --compile-debt と同じ(compile_metrics を共有する)。
+      `— 保留理由:` 付きの観察は負債に数えず、held_bullets として別に持つ。
   python3 scripts/recompile-queue.py next [--limit 5] [--include-blocked]
       次に着手する候補を優先順に出す(却下理由を添える)。
   python3 scripts/recompile-queue.py show <page>
@@ -20,6 +22,10 @@
       lint 用の markdown 断片を stdout に出す(ファイルは書かない)。
 
 <page> は `wiki/concepts/X.md` か `X`(ページ名)のどちらでもよい。
+キー(ページパス)は Unicode NFC に正規化して比較・保存する。macOS のファイル名(NFD)と手入力(NFC)の
+違いで同じページが別キーになるのを防ぐ。読み込み時に NFC で同じキーになる既存の重複はマージする
+(試行履歴は日付順に合わせ、状態と指標は最後に試行のあった側を採る)。ディスク上のファイル名が NFD でも
+NFC のキーから引ける(resolve_on_disk)。
 
 状態:
   pending      負債あり、未着手
@@ -44,6 +50,7 @@ import json
 import os
 import sys
 import tempfile
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 
@@ -114,6 +121,47 @@ def queue_path():
     return VAULT_ROOT / QUEUE_REL
 
 
+def nfc(path):
+    return unicodedata.normalize("NFC", path)
+
+
+def _last_attempt_date(entry):
+    dates = [a.get("date") or "" for a in entry.get("attempts", [])]
+    return max(dates) if dates else ""
+
+
+def merge_entries(a, b):
+    """NFC で同じキーになった 2 エントリを 1 つにする。
+
+    状態と指標は最後に試行のあった側(同日なら試行の多い側)を採る。試行履歴は両方を日付順に並べ、
+    同じ試行(日付・状態・by・理由が同一)は 1 つにする。first_seen は早い方を残す。
+    """
+    primary, other = (a, b) if (_last_attempt_date(a), len(a.get("attempts", []))) >= \
+        (_last_attempt_date(b), len(b.get("attempts", []))) else (b, a)
+    merged = dict(other)
+    merged.update(primary)
+    seen, attempts = set(), []
+    for att in sorted(a.get("attempts", []) + b.get("attempts", []), key=lambda x: x.get("date") or ""):
+        key = json.dumps(att, ensure_ascii=False, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            attempts.append(att)
+    merged["attempts"] = attempts
+    firsts = [e.get("first_seen") for e in (a, b) if e.get("first_seen")]
+    if firsts:
+        merged["first_seen"] = min(firsts)
+    return merged
+
+
+def normalize_entries(entries):
+    """キーを NFC にそろえ、NFC で衝突したエントリをマージする。"""
+    out = {}
+    for key, entry in entries.items():
+        k = nfc(key)
+        out[k] = merge_entries(out[k], entry) if k in out else entry
+    return out
+
+
 def load_queue():
     path = queue_path()
     if not path.is_file():
@@ -124,20 +172,38 @@ def load_queue():
         log(f"ERR: queue unreadable: {exc}")
         raise SystemExit(EXIT_USAGE)
     data.setdefault("version", 1)
-    data.setdefault("entries", {})
+    data["entries"] = normalize_entries(data.get("entries") or {})
     return data
+
+
+def resolve_on_disk(path):
+    """NFC のキーに当たるディスク上のファイル。NFD で保存されたファイル名も引く。無ければ None。"""
+    direct = VAULT_ROOT / path
+    if direct.is_file():
+        return direct
+    parent = direct.parent
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return None
+    target = nfc(direct.name)
+    for name in names:
+        if nfc(name) == target:
+            return parent / name
+    return None
 
 
 def save_queue(data):
     data["updated_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    data["entries"] = normalize_entries(data["entries"])
     ordered = dict(sorted(data["entries"].items(), key=lambda kv: (-kv[1].get("inbox_bullets", 0), kv[0])))
     data["entries"] = ordered
     atomic_write(queue_path(), json.dumps(data, ensure_ascii=False, indent=1))
 
 
 def normalize_page(raw):
-    """`wiki/concepts/X.md` / `X.md` / `X` → `wiki/concepts/X.md`。"""
-    s = raw.strip()
+    """`wiki/concepts/X.md` / `X.md` / `X` → `wiki/concepts/X.md`(NFC)。"""
+    s = nfc(raw.strip())
     if s.startswith("[[") and s.endswith("]]"):
         s = s[2:-2].split("|")[0]
     if s.startswith("wiki/concepts/"):
@@ -161,6 +227,7 @@ def public_entry(entry, path):
         "title": entry.get("title", Path(path).stem),
         "state": entry.get("state"),
         "inbox_bullets": entry.get("inbox_bullets", 0),
+        "held_bullets": entry.get("held_bullets", 0),
         "topic_sections": entry.get("topic_sections", 0),
         "legacy_heading": entry.get("legacy_heading", False),
         "lines": entry.get("lines", 0),
@@ -177,8 +244,11 @@ def public_entry(entry, path):
 # --------------------------------------------------------------------------- refresh
 
 def page_recompiled_date(stats, path):
+    disk = resolve_on_disk(path)
+    if disk is None:
+        return None, None
     try:
-        text = (VAULT_ROOT / path).read_text(encoding="utf-8")
+        text = disk.read_text(encoding="utf-8")
     except OSError:
         return None, None
     fm, body = stats.split_frontmatter(text)
@@ -191,7 +261,7 @@ def page_recompiled_date(stats, path):
 @locked_queue
 def refresh(min_inbox, min_orphan_inbox):
     stats = load_stats_module()
-    debt = {row["path"]: row for row in stats.scan_compile_debt(min_inbox, min_orphan_inbox)}
+    debt = {nfc(row["path"]): row for row in stats.scan_compile_debt(min_inbox, min_orphan_inbox)}
     data = load_queue()
     entries = data["entries"]
     day = today()
@@ -203,6 +273,7 @@ def refresh(min_inbox, min_orphan_inbox):
         metrics = {
             "title": row["title"],
             "inbox_bullets": row["inbox_bullets"],
+            "held_bullets": row.get("held_bullets", 0),
             "topic_sections": row["topic_sections"],
             "legacy_heading": row["legacy_heading"],
             "lines": row["lines"],
@@ -228,7 +299,8 @@ def refresh(min_inbox, min_orphan_inbox):
             entry["missing"] = True
             continue
         entry.pop("missing", None)
-        entry.update({"inbox_bullets": metrics["inbox_bullets"], "topic_sections": metrics["topic_sections"],
+        entry.update({"inbox_bullets": metrics["inbox_bullets"], "held_bullets": metrics.get("held_bullets", 0),
+                      "topic_sections": metrics["topic_sections"],
                       "legacy_heading": metrics["legacy_heading"], "lines": metrics["lines"], "recompiled": rec})
         if entry.get("state") in ("pending", "in_progress"):
             entry["state"] = "done"
@@ -246,6 +318,7 @@ def refresh(min_inbox, min_orphan_inbox):
         "counts": state_counts(entries),
         "waiting_bullets": sum(e.get("inbox_bullets", 0) for e in entries.values()
                                if e.get("state") in ("pending", "in_progress", "rejected")),
+        "held_bullets": sum(e.get("held_bullets", 0) for e in entries.values() if not e.get("missing")),
         "added": added,
         "resolved": resolved,
         "reentered": reentered,
@@ -279,7 +352,7 @@ def mark(page, state, reason, by, block_after):
     path = normalize_page(page)
     entry = data["entries"].get(path)
     if entry is None:
-        if not (VAULT_ROOT / path).is_file():
+        if resolve_on_disk(path) is None:
             log(f"ERR: page not found: {path}")
             return None, EXIT_MISSING
         entry = {"state": "pending", "first_seen": today(), "resolved_at": None, "attempts": [],
@@ -332,6 +405,8 @@ def render_report(entries, top=10):
         for path, e in waiting[:top]:
             name = Path(path).stem
             tag = f"{e.get('inbox_bullets', 0)} 観察 / {e.get('topic_sections', 0)} 主題節"
+            if e.get("held_bullets"):
+                tag += f" / 保留 {e['held_bullets']}"
             if e.get("legacy_heading"):
                 tag += " / 旧見出し"
             rej = rejection_reasons(e)

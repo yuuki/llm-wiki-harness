@@ -15,9 +15,19 @@
 - `bm25-index.py` が SQLite 鏡像（`.vault-meta/bm25/index.sqlite`）も書く。`retrieve.py` は鏡像が JSON と同じ版なら語ごとの posting だけを読み、巨大な JSON を全部読み込まない。古ければ JSON に戻る。`bm25-index.py sqlite` で鏡像だけ作り直せる。`wiki-doctor.py` に `bm25_sqlite` 検査を足した。
 - `dense-index.py`。ページ先頭（chunk-000）を 1 ページ 1 ベクトルで埋め込み、`.vault-meta/dense/` に置く。`retrieve.py` は語の重なりが無い言い換えの問いでも、この索引から近いページを rerank の候補に足す（ローカル ollama のみ。無ければ従来どおり BM25 とグラフだけ）。`wiki-retrieve-refresh.py` が BM25 の後に差分だけ更新し（`--no-dense` で省略）、`test_dense_index.py` を足した。
 - `retrieve.py --also "<言い換え>"`。言い換えごとにパイプラインを走らせ、元の問いに 2 倍の重みを付けて RRF で融合する（候補に `multi_score` / `matched_queries`）。手順は `skills/wiki-query/references/agentic-followup.md`（最初の retrieve が問いの対象を外したときだけ、名前の照合 → 言い換え → 近傍 → `rg` を最大 2 周）。`wiki-query` / `wiki-survey` / `wiki-thesis` から参照する。
+- `pdf-text.sh` / `pdf-reading-order.py`。論文・書籍の PDF から、二段組みを左段 → 右段の読み順に並べたテキストを抽出する（pdftotext の単語座標を列で並べ替える）。表の確認用に `-layout` 版も隣に残す。`fetch-paper-pdf.sh` / `fetch-book.sh` が呼ぶ。
+- `pdf-text-quality.py` / `pdf-ocr.sh` / `vision-ocr.swift`。テキスト層が無い PDF や、数字が字形ごと抜けた PDF を検知し、macOS の Apple Vision で `<slug>.ocr.txt` を作る。`wiki-ingest-paper` が抽出品質を判定してから読む。`test_pdf_reading_order.py` / `test_pdf_text_quality.py` を足した。
+- `survey-augment-plan.py` と `wiki-survey/references/augment.md`。既存の `wiki/surveys/` ページへ新しい source を織り込む増補を、一括で計画する（追加候補の振り分け、図の再利用、節ごとの差分）。`test_survey_augment_plan.py` を足した。
+- `wiki-concept-stats.py --structure`。concept の構造欠落（`# タイトル`・`## 定義`・`## 出典` の欠落、本文に `[[@` があるのに `sources:` が空）を報告する。`wiki-lint` が使う。
 
 ### Changed
 
+- `claim-audit.py numbers` の照合を広げた。原本側の位取り（空白・アポストロフィ・カンマ区切り、漢数字の位取り記数、億万の複合、英語の数詞）、月名と URL 日付、ページ番号・スライド番号・行番号の参照、図表キャプション（斜体・動画フレーム・スライド画像の説明・画像から読んだ旨の印）を読み分け、`-layout` 版と OCR 版の抽出も併せて見る。
+- `fetch-paper-pdf.sh` は 2007 年以前の旧形式 arXiv ID も受け付ける。`fetch-book.sh` は読み順テキストと `-layout` 版を並べて置く。
+- 再編纂の手順（`wiki-refactor/references/recompile.md`、規約 §8）を改めた。小さいページの扱い、単一出典の圧縮、ハブの分割、確定の直列化。`recompile-finalize.sh` は台帳とコミットを大域 flock で直列化し、`recompile-queue.py` はキーを NFC に正規化して重複を統合する。
+- `wiki_questions.py` は出典付きの断定をさらに捕捉し、`wiki_sections.py` / `wiki-concept-stats.py` は状態行を受信箱の空き表示として扱い、保留中の観察を compile 負債に数えない。`wiki-excerpt.py --outline` の命題数は予算の影響を受けない。
+- `wiki-doctor.py` は address の検査で frontmatter 全体を読む。`wiki-lint` は concept の構造検査を足した。
+- `wiki-ingest-paper` / `wiki-ingest-book` / `wiki-survey` の本文を、上記の抽出・増補の手順に合わせた。
 - `rerank.py` の既定の埋め込みモデルを `qwen3-embedding:0.6b` にし、モデルごとの文書接頭辞と `WIKI_EMBED_MODEL` での差し替えに対応した。
 - `claim-audit.py numbers` は先頭の 0 を省いた小数（`.5`）も数値として照合する。
 - `wiki-ingest` は記事内の mermaid ブロックも図として source ページへ載せる（原本のコードをそのまま使い、ラベルだけ和訳してよい）。
